@@ -15,7 +15,7 @@
 //! Implementing host-side `subscribe` would restore true streaming.
 //!
 //! The pure frame-parsing and payload-building helpers (`parse_start`,
-//! `is_stop`, `ws_url`, `session_update_json`, `audio_append_json`,
+//! `is_stop`, `ws_url`, `audio_append_json`,
 //! `preview_json`/`done_json`/`error_json`, `header`) live in the crate root so
 //! they compile and unit-test on the host; this module wires them to the
 //! wasm-only `super-stt:realtime` resources.
@@ -27,7 +27,8 @@ use super::super_stt::realtime::ws::{self, ConsumerStream, WsError, WsFrame, WsS
 
 const DEFAULT_BASE_URL: &str = "https://api.mistral.ai";
 const DEFAULT_MODEL: &str = "voxtral-mini-transcribe-realtime-2602";
-const COMMIT_JSON: &str = r#"{"type":"input_audio_buffer.commit"}"#;
+const INPUT_AUDIO_FLUSH: &str = r#"{"type":"input_audio.flush"}"#;
+const INPUT_AUDIO_END: &str = r#"{"type":"input_audio.end"}"#;
 
 impl WsServerGuest for super::Component {
     fn handle(headers: Vec<(String, Vec<u8>)>, consumer: ConsumerStream) -> Result<(), WsError> {
@@ -44,23 +45,23 @@ fn run(headers: &[(String, Vec<u8>)], consumer: &ConsumerStream) -> Result<(), W
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
     let model = crate::header(headers, "x-stt-model").unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
-    // 1. Read the consumer's `start` frame (sample_rate + optional language).
-    let (sample_rate, language) = match consumer.recv()? {
-        WsFrame::Text(s) => {
-            let Ok(parsed) = crate::parse_start(&s) else {
-                let _ = consumer.send_text(&crate::error_json("invalid start frame"));
-                return Ok(());
-            };
-            parsed
+    // 1. Read and validate the consumer's `start` frame. Mistral needs no
+    //    session config — the model is in the URL and PCM s16le/16 kHz is
+    //    assumed — so the frame's fields are not forwarded upstream.
+    match consumer.recv()? {
+        WsFrame::Text(s) if crate::parse_start(&s).is_ok() => {}
+        WsFrame::Text(_) => {
+            let _ = consumer.send_text(&crate::error_json("invalid start frame"));
+            return Ok(());
         }
         WsFrame::Close(_) => return Ok(()), // consumer hung up before starting
         WsFrame::Binary(_) => {
             let _ = consumer.send_text(&crate::error_json("audio before start frame"));
             return Ok(());
         }
-    };
+    }
 
-    // 2. Open the upstream WS and configure the session.
+    // 2. Open the upstream WS and wait for `session.created` before streaming.
     let url = crate::ws_url(&base_url, &model);
     let upstream = match ws::connect(
         &url,
@@ -77,11 +78,7 @@ fn run(headers: &[(String, Vec<u8>)], consumer: &ConsumerStream) -> Result<(), W
             return Ok(());
         }
     };
-    if let Err(e) = upstream.send_text(&crate::session_update_json(
-        sample_rate,
-        language.as_deref(),
-    )) {
-        let _ = consumer.send_text(&crate::error_json(&format!("session.update failed: {e:?}")));
+    if !await_session_created(&upstream, consumer) {
         return Ok(());
     }
 
@@ -101,14 +98,46 @@ fn run(headers: &[(String, Vec<u8>)], consumer: &ConsumerStream) -> Result<(), W
         }
     }
 
-    // 4. Commit and PHASE 2 — drain upstream transcript events.
-    if let Err(e) = upstream.send_text(COMMIT_JSON) {
-        let _ = consumer.send_text(&crate::error_json(&format!("commit failed: {e:?}")));
-        return Ok(());
+    // 4. Flush + end the input, then PHASE 2 — drain transcript events.
+    for msg in [INPUT_AUDIO_FLUSH, INPUT_AUDIO_END] {
+        if let Err(e) = upstream.send_text(msg) {
+            let _ = consumer.send_text(&crate::error_json(&format!("flush/end failed: {e:?}")));
+            return Ok(());
+        }
     }
     drain_upstream(&upstream, consumer);
     let _ = consumer.close();
     Ok(())
+}
+
+/// Read upstream until Mistral's `session.created` handshake event. Returns
+/// `false` (after notifying the consumer) if the upstream errors or closes
+/// before the session is ready.
+fn await_session_created(upstream: &WsStream, consumer: &ConsumerStream) -> bool {
+    loop {
+        match upstream.recv() {
+            Ok(WsFrame::Text(s)) => match event_type(&s).as_deref() {
+                Some("session.created") => return true,
+                Some("error") => {
+                    let _ = consumer.send_text(&crate::error_json(&format!("upstream error: {s}")));
+                    return false;
+                }
+                _ => {} // ignore other handshake chatter
+            },
+            Ok(WsFrame::Binary(_)) => {}
+            Ok(WsFrame::Close(_)) | Err(_) => {
+                let _ = consumer.send_text(&crate::error_json("upstream closed during handshake"));
+                return false;
+            }
+        }
+    }
+}
+
+/// The `type` field of a JSON event, if present.
+fn event_type(s: &str) -> Option<String> {
+    serde_json::from_str::<Value>(s)
+        .ok()
+        .and_then(|v| v.get("type").and_then(Value::as_str).map(str::to_string))
 }
 
 /// PHASE 2 — read upstream transcript events until completion/close.
@@ -155,17 +184,17 @@ fn handle_upstream_event(s: &str, consumer: &ConsumerStream, accumulated: &mut S
         return true;
     }
 
-    if kind.ends_with("completed") {
+    if kind == "transcription.done" {
         let transcript = v
-            .get("transcript")
+            .get("text")
             .and_then(Value::as_str)
             .map_or_else(|| accumulated.trim().to_string(), str::to_string);
         let _ = consumer.send_text(&crate::done_json(&transcript));
         return true;
     }
 
-    if kind.ends_with("delta") {
-        if let Some(delta) = v.get("delta").and_then(Value::as_str) {
+    if kind == "transcription.text.delta" {
+        if let Some(delta) = v.get("text").and_then(Value::as_str) {
             accumulated.push_str(delta);
             let _ = consumer.send_text(&crate::preview_json(accumulated.trim()));
         }

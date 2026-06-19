@@ -27,10 +27,10 @@ macro_rules! component_or_skip {
     };
 }
 
-/// Mock Mistral realtime upstream. Accepts the WS upgrade, consumes
-/// session.update + input_audio_buffer.append*, and on commit replies with two
-/// `...delta` events then one `...completed`. Returns the bound authority
-/// (host:port) and the accept task handle.
+/// Mock Mistral realtime upstream. Accepts the WS upgrade, sends
+/// `session.created`, consumes `input_audio.append*`, and on `input_audio.end`
+/// replies with two `transcription.text.delta` events then `transcription.done`.
+/// Returns the bound authority (host:port) and the accept task handle.
 async fn start_mock_upstream() -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let authority = listener.local_addr().unwrap().to_string(); // "127.0.0.1:PORT"
@@ -42,30 +42,31 @@ async fn start_mock_upstream() -> (String, tokio::task::JoinHandle<()>) {
         let Ok(mut ws) = accept_async(tcp).await else {
             return;
         };
+        // Handshake: the guest waits for `session.created` before streaming.
+        let _ = ws
+            .send(WsMessage::Text(r#"{"type":"session.created"}"#.into()))
+            .await;
         while let Some(Ok(msg)) = ws.next().await {
-            // session.update / append: consume silently; only react to commit.
+            // input_audio.append*: consume silently; react once the input ends.
             if let WsMessage::Text(t) = msg
-                && t.as_str().contains("input_audio_buffer.commit")
+                && t.as_str().contains("input_audio.end")
             {
                 let _ = ws
                     .send(WsMessage::Text(
-                        r#"{"type":"conversation.item.input_audio_transcription.delta","delta":"hello "}"#
-                            .into(),
+                        r#"{"type":"transcription.text.delta","text":"hello "}"#.into(),
                     ))
                     .await;
                 let _ = ws
                     .send(WsMessage::Text(
-                        r#"{"type":"conversation.item.input_audio_transcription.delta","delta":"world"}"#
-                            .into(),
+                        r#"{"type":"transcription.text.delta","text":"world"}"#.into(),
                     ))
                     .await;
                 let _ = ws
                     .send(WsMessage::Text(
-                        r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"hello world"}"#
-                            .into(),
+                        r#"{"type":"transcription.done","text":"hello world"}"#.into(),
                     ))
                     .await;
-                // Done; the guest will close after `completed`.
+                // Done; the guest closes after `transcription.done`.
                 break;
             }
         }

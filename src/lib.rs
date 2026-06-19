@@ -133,29 +133,12 @@ pub fn ws_url(base_url: &str, model: &str) -> String {
     format!("{scheme}://{host}/v1/audio/transcriptions/realtime?model={model}")
 }
 
-/// `session.update` payload configuring a PCM transcription session.
-#[must_use]
-pub fn session_update_json(sample_rate: u32, language: Option<&str>) -> String {
-    json!({
-        "type": "session.update",
-        "session": {
-            "type": "transcription",
-            "audio": {
-                "input": {
-                    "format": { "type": "audio/pcm", "rate": sample_rate },
-                    "transcription": { "language": language.unwrap_or("en") }
-                }
-            }
-        }
-    })
-    .to_string()
-}
-
-/// `input_audio_buffer.append` payload carrying base64-standard PCM.
+/// `input_audio.append` payload carrying base64-standard PCM (s16le mono 16 kHz,
+/// the format Mistral's realtime transcription expects).
 #[must_use]
 pub fn audio_append_json(pcm: &[u8]) -> String {
     let audio = base64::engine::general_purpose::STANDARD.encode(pcm);
-    json!({ "type": "input_audio_buffer.append", "audio": audio }).to_string()
+    json!({ "type": "input_audio.append", "audio": audio }).to_string()
 }
 
 /// Parse the consumer's `start` frame: `{"type":"start","sample_rate":N,
