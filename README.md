@@ -1,5 +1,7 @@
 # Super STT — Mistral backend
 
+[![coverage](https://img.shields.io/endpoint?url=https://jorge-menjivar.github.io/super-stt-mistral/coverage.json)](https://jorge-menjivar.github.io/super-stt-mistral/)
+
 A speech-to-text backend for **[Super STT](https://github.com/jorge-menjivar/super-stt)**.
 It proxies audio to [Mistral](https://mistral.ai/)'s hosted transcription API, so
 transcription runs in the cloud rather than on your machine. It supports both **batch**
