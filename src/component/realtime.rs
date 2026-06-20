@@ -41,6 +41,9 @@ fn run(headers: &[(String, Vec<u8>)], consumer: &ConsumerStream) -> Result<(), W
         let _ = consumer.send_text(&crate::error_json("missing mistral api key"));
         return Ok(());
     };
+    // Internal test seam: `base_url` is not a declared manifest option, so the
+    // daemon never sends this header in production — the default is always used.
+    // The realtime round-trip test injects it to reach a mock upstream.
     let base_url = crate::header(headers, "x-stt-option-base_url")
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
     let model = crate::header(headers, "x-stt-model").unwrap_or_else(|| DEFAULT_MODEL.to_string());

@@ -29,8 +29,7 @@ involved.
 | `voxtral-mini-latest`                   | mistral  | online           | en        | Mistral API key |
 | `voxtral-mini-transcribe-realtime-2602` | mistral  | online, realtime | en        | Mistral API key |
 
-The API base URL is overridable (the `base_url` option) for gateways/proxies. The realtime
-model streams audio over a WebSocket to
+The realtime model streams audio over a WebSocket to
 `wss://api.mistral.ai/v1/audio/transcriptions/realtime`.
 
 ## What's in here

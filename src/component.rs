@@ -79,6 +79,9 @@ fn transcribe(request: &IncomingRequest) -> (u16, Vec<u8>) {
             })),
         );
     };
+    // Internal test seam: `base_url` is not a declared manifest option, so the
+    // daemon never sends this header in production — the default is always used.
+    // The round-trip tests inject it to reach a mock upstream.
     let base_url = crate::header(&entries, "x-stt-option-base_url")
         .unwrap_or_else(|| "https://api.mistral.ai".to_string());
     let model =

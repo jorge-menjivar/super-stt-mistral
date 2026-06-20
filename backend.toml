@@ -26,13 +26,6 @@
     description = "Used to authenticate requests to api.mistral.ai."
     required = true
 
-[[options]]
-    name = "base_url"
-    label = "API base URL"
-    description = "Override the API base URL, e.g. for a gateway."
-    type = "string"
-    default = "https://api.mistral.ai"
-
 [[models]]
     name = "voxtral-mini-latest"
     provider = "mistral"
