@@ -78,14 +78,21 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     buf
 }
 
-/// Build a `multipart/form-data` body with `model` and `file` (audio.wav).
+/// Build a `multipart/form-data` body with `model`, an optional `language`, and
+/// `file` (audio.wav).
 #[must_use]
-pub fn build_multipart(boundary: &str, model: &str, wav: &[u8]) -> Vec<u8> {
+pub fn build_multipart(boundary: &str, model: &str, language: Option<&str>, wav: &[u8]) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
     body.extend_from_slice(model.as_bytes());
     body.extend_from_slice(b"\r\n");
+    if let Some(lang) = language {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"language\"\r\n\r\n");
+        body.extend_from_slice(lang.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(
         b"Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n",
@@ -239,7 +246,7 @@ mod tests {
 
     #[test]
     fn build_multipart_has_model_and_file_parts() {
-        let body = build_multipart("BOUND", "voxtral-mini-latest", b"WAVDATA");
+        let body = build_multipart("BOUND", "voxtral-mini-latest", None, b"WAVDATA");
         let s = String::from_utf8_lossy(&body);
         assert!(s.starts_with("--BOUND\r\n"));
         assert!(s.contains("name=\"model\""));
@@ -247,7 +254,16 @@ mod tests {
         assert!(s.contains("name=\"file\"; filename=\"audio.wav\""));
         assert!(s.contains("Content-Type: audio/wav"));
         assert!(s.contains("WAVDATA"));
+        assert!(!s.contains("name=\"language\""));
         assert!(s.ends_with("--BOUND--\r\n"));
+    }
+
+    #[test]
+    fn build_multipart_includes_language_when_present() {
+        let body = build_multipart("BOUND", "voxtral-mini-latest", Some("es"), b"WAVDATA");
+        let s = String::from_utf8_lossy(&body);
+        assert!(s.contains("name=\"language\""));
+        assert!(s.contains("\r\n\r\nes\r\n"));
     }
 
     #[test]

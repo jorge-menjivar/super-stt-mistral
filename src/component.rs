@@ -112,8 +112,15 @@ fn transcribe(request: &IncomingRequest) -> (u16, Vec<u8>) {
             .unwrap_or(16000),
     )
     .unwrap_or(16000);
+    // Mistral's transcription API auto-detects when `language` is omitted, so the
+    // reserved `auto` (and a missing field) map to "no language"; a specific code
+    // is forwarded.
+    let language = match req.get("language").and_then(|v| v.as_str()) {
+        Some("auto") | None => None,
+        Some(code) => Some(code),
+    };
 
-    match call_mistral(&base_url, &api_key, &model, &audio, sample_rate) {
+    match call_mistral(&base_url, &api_key, &model, language, &audio, sample_rate) {
         Ok(text) => (
             200,
             to_vec(&serde_json::json!({ "status": "success", "transcription": text })),
@@ -132,12 +139,13 @@ fn call_mistral(
     base_url: &str,
     api_key: &str,
     model: &str,
+    language: Option<&str>,
     audio: &[f32],
     sample_rate: u32,
 ) -> Result<String, String> {
     let wav = crate::encode_wav(audio, sample_rate);
     let boundary = "----superstt7MA4YWxkTrZu0gW";
-    let multipart = crate::build_multipart(boundary, model, &wav);
+    let multipart = crate::build_multipart(boundary, model, language, &wav);
     let (is_https, authority) = crate::parse_base(base_url);
     let scheme = if is_https {
         Scheme::Https
