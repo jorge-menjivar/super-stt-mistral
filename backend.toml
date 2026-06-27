@@ -10,6 +10,7 @@
     entrypoint = "mistral.wasm"
     contract = "v1"
     license = "GPL-3.0-only"
+    description = "Cloud speech-to-text via the Mistral (Voxtral) API."
 
 [network]
     allowed_hosts = ["api.mistral.ai"]
