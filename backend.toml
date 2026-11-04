@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-only
-#:schema https://jorge-menjivar.github.io/super-stt/backend.schema.json
+#:schema https://jorge-menjivar.github.io/super-voice/backend.schema.json
 # Mistral backend configuration. See docs/protocol/backend/config.md.
 
 [backend]
@@ -9,7 +9,8 @@
   version     = "0.1.1"
   kind        = "wasm"
   entrypoint  = "mistral.wasm"
-  contract    = "v2"
+  product     = "super-voice"
+  contract    = "v1"
   license     = "GPL-3.0-only"
   description = "Cloud speech-to-text via the Mistral (Voxtral) API."
 
@@ -30,6 +31,7 @@
 
 [[models]]
   name                = "voxtral-mini-latest"
+  role                = "transcription"
   provider            = "mistral"
   multilingual        = true
   primary_language    = "en"
@@ -52,6 +54,7 @@
 
 [[models]]
   name                = "voxtral-mini-transcribe-realtime-2602"
+  role                = "transcription"
   provider            = "mistral"
   multilingual        = true
   primary_language    = "en"
