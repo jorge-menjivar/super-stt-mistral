@@ -39,13 +39,28 @@ pub const FRAME_AUDIO: u8 = 0x01;
 pub const FRAME_DONE: u8 = 0x03;
 pub const FRAME_ERROR: u8 = 0x04;
 
+/// Where a cloned voice's reference clip is kept: the component's private
+/// `/tmp`, which only it sees, and which the daemon removes when the model
+/// unloads.
+pub const VOICES_DIR: &str = "/tmp/voices";
+
 /// What the daemon asked to have spoken.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SynthesizeRequest {
     pub text: String,
-    /// A preset voice id. The model declares no other kind, so the daemon
-    /// never sends a `voice:` or `desc:` one.
+    /// A preset voice's id, or a cloned voice's `voice:<uuid>`. The model
+    /// declares no other kind, so the daemon never sends a `desc:` one.
     pub voice: Option<String>,
+}
+
+/// The voice a synthesis speaks in, as Mistral takes it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Voice<'a> {
+    /// One of Mistral's preset voices, by id.
+    Preset(&'a str),
+    /// A cloned voice, by its reference clip: a WAV file, sent with the
+    /// request. Mistral keeps nothing of it.
+    Cloned(&'a [u8]),
 }
 
 /// Read a `/v1/synthesize` body.
@@ -77,16 +92,102 @@ pub fn parse_synthesize(body: &[u8]) -> Result<SynthesizeRequest, &'static str> 
 
 /// The body of a streamed `POST /v1/audio/speech`.
 #[must_use]
-pub fn speech_request_json(model: &str, text: &str, voice: &str) -> Vec<u8> {
-    json!({
+pub fn speech_request_json(model: &str, text: &str, voice: &Voice<'_>) -> Vec<u8> {
+    let mut body = json!({
         "model": model,
         "input": text,
-        "voice_id": voice,
         "response_format": "pcm",
         "stream": true,
+    });
+    match voice {
+        Voice::Preset(id) => body["voice_id"] = json!(id),
+        Voice::Cloned(wav) => {
+            body["ref_audio"] = json!(base64::engine::general_purpose::STANDARD.encode(wav));
+        }
+    }
+    body.to_string().into_bytes()
+}
+
+/// The file a cloned voice's clip is kept in, or `None` for an id that is not
+/// a cloned voice's.
+///
+/// The daemon names one `voice:<uuid>`. Anything but letters, digits and
+/// dashes after the prefix is refused, so no id can name a file outside
+/// [`VOICES_DIR`].
+#[must_use]
+pub fn clip_file(voice: &str) -> Option<String> {
+    let id = voice.strip_prefix("voice:")?;
+    let safe = !id.is_empty()
+        && id.len() <= 64
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    safe.then(|| format!("{VOICES_DIR}/{id}.wav"))
+}
+
+/// A cloned voice to keep: the file it goes in and the clip, as a WAV.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Registration {
+    pub file: String,
+    pub wav: Vec<u8>,
+}
+
+/// Read a `POST /v1/voices` body.
+///
+/// The clip arrives as base64 PCM, which the daemon sends mono s16le today. It
+/// is kept as a WAV, the form Mistral takes it in. The transcript, when there
+/// is one, is not needed: Mistral clones from the audio alone.
+///
+/// # Errors
+/// `invalid_request` for a body that is not JSON, `invalid_voice` for an id
+/// that is not a cloned voice's, `unsupported_audio` for audio that is not
+/// mono s16le, and `invalid_audio` for audio that is missing, not base64, or
+/// not whole samples.
+pub fn parse_registration(body: &[u8]) -> Result<Registration, &'static str> {
+    let v: Value = serde_json::from_slice(body).map_err(|_| "invalid_request")?;
+    let file = v
+        .get("voice")
+        .and_then(Value::as_str)
+        .and_then(clip_file)
+        .ok_or("invalid_voice")?;
+    let format = v.get("format").and_then(Value::as_str);
+    let channels = v.get("channels").and_then(Value::as_u64);
+    let sample_rate = v
+        .get("sample_rate")
+        .and_then(Value::as_u64)
+        .and_then(|r| u32::try_from(r).ok())
+        .filter(|r| (8000..=192_000).contains(r));
+    let (Some("s16le"), Some(1), Some(sample_rate)) = (format, channels, sample_rate) else {
+        return Err("unsupported_audio");
+    };
+    let pcm = v
+        .get("audio")
+        .and_then(Value::as_str)
+        .and_then(|a| base64::engine::general_purpose::STANDARD.decode(a).ok())
+        .filter(|pcm| !pcm.is_empty() && pcm.len() % 2 == 0)
+        .ok_or("invalid_audio")?;
+    Ok(Registration {
+        file,
+        wav: crate::wav_from_s16le(&pcm, sample_rate),
     })
-    .to_string()
-    .into_bytes()
+}
+
+/// Decode a percent-encoded path segment, such as the id in
+/// `DELETE /v1/voices/{voice}`. `None` for one that is malformed.
+#[must_use]
+pub fn percent_decode(segment: &str) -> Option<String> {
+    let bytes = segment.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = segment.get(i + 1..i + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// One frame: `[kind][u32 length, little-endian][payload]`.
@@ -299,7 +400,7 @@ mod tests {
         let v: Value = serde_json::from_slice(&speech_request_json(
             "voxtral-mini-tts-3",
             "Hi.",
-            "voice_478",
+            &Voice::Preset("voice_478"),
         ))
         .unwrap();
         assert_eq!(
@@ -431,5 +532,84 @@ mod tests {
         let (_, code, detail) = upstream_refusal(502, b"Bad Gateway");
         assert_eq!(code, "inference_failed");
         assert_eq!(detail, "Mistral answered 502: Bad Gateway");
+    }
+
+    /// A cloned voice goes as its clip, and never with a voice id.
+    #[test]
+    fn a_cloned_voice_is_sent_as_its_reference_clip() {
+        let v: Value = serde_json::from_slice(&speech_request_json(
+            "voxtral-mini-tts-3",
+            "Hi.",
+            &Voice::Cloned(b"RIFF...."),
+        ))
+        .unwrap();
+        assert_eq!(v["ref_audio"], "UklGRi4uLi4=");
+        assert!(v.get("voice_id").is_none());
+    }
+
+    #[test]
+    fn only_a_cloned_voice_id_names_a_clip_file() {
+        assert_eq!(
+            clip_file("voice:2f8a2d0e-9c31-4e77-b0aa-1c6b2f0a51d4").as_deref(),
+            Some("/tmp/voices/2f8a2d0e-9c31-4e77-b0aa-1c6b2f0a51d4.wav")
+        );
+        for not_a_clip in [
+            "voice_478",
+            "voice:",
+            "voice:../../etc/passwd",
+            "voice:a/b",
+            "voice:a.b",
+            "desc:a calm narrator",
+        ] {
+            assert_eq!(clip_file(not_a_clip), None, "{not_a_clip}");
+        }
+    }
+
+    #[test]
+    fn a_registration_becomes_a_wav_to_keep() {
+        let body = json!({
+            "voice": "voice:abc-123",
+            "transcript": "Hello there.",
+            "sample_rate": 24000,
+            "channels": 1,
+            "format": "s16le",
+            "audio": "AQACAA==",
+        });
+        let reg = parse_registration(body.to_string().as_bytes()).unwrap();
+        assert_eq!(reg.file, "/tmp/voices/abc-123.wav");
+        assert_eq!(reg.wav, crate::wav_from_s16le(&[1, 0, 2, 0], 24000));
+        assert_eq!(&reg.wav[..4], b"RIFF");
+        assert_eq!(&reg.wav[44..], [1, 0, 2, 0]);
+    }
+
+    #[test]
+    fn a_registration_mistral_cannot_use_is_refused() {
+        let with = |field: &str, value: Value| {
+            let mut body = json!({
+                "voice": "voice:abc", "sample_rate": 24000, "channels": 1,
+                "format": "s16le", "audio": "AQACAA==",
+            });
+            body[field] = value;
+            parse_registration(body.to_string().as_bytes()).unwrap_err()
+        };
+        assert_eq!(with("voice", json!("voice_478")), "invalid_voice");
+        assert_eq!(with("format", json!("f32le")), "unsupported_audio");
+        assert_eq!(with("channels", json!(2)), "unsupported_audio");
+        assert_eq!(with("sample_rate", json!(0)), "unsupported_audio");
+        assert_eq!(with("audio", json!("not base64!")), "invalid_audio");
+        assert_eq!(with("audio", json!("AQAC")), "invalid_audio"); // 3 bytes
+        assert_eq!(with("audio", json!("")), "invalid_audio");
+        assert_eq!(parse_registration(b"nope").unwrap_err(), "invalid_request");
+    }
+
+    #[test]
+    fn a_path_segment_is_percent_decoded() {
+        assert_eq!(
+            percent_decode("voice%3Aabc-123").as_deref(),
+            Some("voice:abc-123")
+        );
+        assert_eq!(percent_decode("voice:abc").as_deref(), Some("voice:abc"));
+        assert_eq!(percent_decode("voice%3"), None);
+        assert_eq!(percent_decode("voice%zz"), None);
     }
 }

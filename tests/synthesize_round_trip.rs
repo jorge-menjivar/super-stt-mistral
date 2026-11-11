@@ -348,3 +348,139 @@ async fn a_missing_key_is_reported_without_asking_mistral() {
     assert_eq!(answer.status, 400);
     assert_eq!(answer.json()["message"], "missing_secret_mistral_api_key");
 }
+
+/// A cloned voice's id, as the daemon names one.
+const CLONED: &str = "voice:2f8a2d0e-9c31-4e77-b0aa-1c6b2f0a51d4";
+
+/// A clip to clone from: s16le samples, a ramp.
+fn clip() -> Vec<u8> {
+    (0..2400i16)
+        .flat_map(|i| (i - 1200).to_le_bytes())
+        .collect()
+}
+
+/// The WAV Mistral should get for `clip()`, base64 as it travels.
+fn clip_wav_b64() -> String {
+    base64::engine::general_purpose::STANDARD
+        .encode(super_voice_backend_mistral::wav_from_s16le(&clip(), 24000))
+}
+
+/// A registered voice is spoken from its clip, sent to Mistral as
+/// `ref_audio` with no voice id. Registration and synthesis are separate
+/// requests to fresh instances; the clip waits in the private `/tmp`.
+#[tokio::test]
+async fn a_cloned_voice_is_spoken_from_its_registered_clip() {
+    let _path = component_or_skip!();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/speech"))
+        .and(JsonBody(json!({
+            "model": "voxtral-mini-tts-3",
+            "input": "In my own voice.",
+            "ref_audio": clip_wav_b64(),
+            "response_format": "pcm",
+            "stream": true,
+        })))
+        .respond_with(sse(format!("{}{DONE_EVENT}", delta(&[5, 6, 7, 8]))))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let backend = backend(&server, Some("test-key")).unwrap();
+    let (status, body) = backend.register_voice(CLONED, &clip()).await.unwrap();
+    assert_eq!(
+        (status, &body["status"]),
+        (200, &json!("success")),
+        "{body}"
+    );
+    assert!(
+        backend
+            .private_tmp()
+            .join("voices/2f8a2d0e-9c31-4e77-b0aa-1c6b2f0a51d4.wav")
+            .is_file(),
+        "the clip is kept in the private /tmp"
+    );
+
+    for _ in 0..2 {
+        let answer = backend
+            .synthesize(&json!({ "text": "In my own voice.", "voice": CLONED }))
+            .await
+            .unwrap();
+        assert_eq!(answer.status, 200);
+        assert_eq!(
+            answer.frames(),
+            [(AUDIO, vec![5, 6, 7, 8]), (DONE, Vec::new())]
+        );
+    }
+}
+
+/// A cloned voice this loaded model was never given is `unknown_voice`, and
+/// Mistral is never asked.
+#[tokio::test]
+async fn an_unregistered_cloned_voice_is_unknown_without_asking_mistral() {
+    let _path = component_or_skip!();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let answer = backend(&server, Some("test-key"))
+        .unwrap()
+        .synthesize(&json!({ "text": "Hello.", "voice": CLONED }))
+        .await
+        .unwrap();
+    assert_eq!(answer.status, 400);
+    assert_eq!(answer.json()["message"], "unknown_voice");
+}
+
+/// Deleting a voice forgets its clip; deleting it again is a `404`, which the
+/// daemon takes as done.
+#[tokio::test]
+async fn a_deleted_voice_is_forgotten() {
+    let _path = component_or_skip!();
+    let server = MockServer::start().await;
+    let backend = backend(&server, Some("test-key")).unwrap();
+    let file = backend
+        .private_tmp()
+        .join("voices/2f8a2d0e-9c31-4e77-b0aa-1c6b2f0a51d4.wav");
+
+    assert_eq!(
+        backend.register_voice(CLONED, &clip()).await.unwrap().0,
+        200
+    );
+    assert!(file.is_file());
+    assert_eq!(backend.unregister_voice(CLONED).await.unwrap(), 200);
+    assert!(!file.exists(), "the clip is gone");
+    assert_eq!(backend.unregister_voice(CLONED).await.unwrap(), 404);
+
+    let answer = backend
+        .synthesize(&json!({ "text": "Hello.", "voice": CLONED }))
+        .await
+        .unwrap();
+    assert_eq!(answer.json()["message"], "unknown_voice");
+}
+
+/// An id that is not a cloned voice's names no file, so it can never reach
+/// outside the voices directory.
+#[tokio::test]
+async fn a_voice_id_cannot_name_a_path() {
+    let _path = component_or_skip!();
+    let server = MockServer::start().await;
+    let backend = backend(&server, Some("test-key")).unwrap();
+    let (status, body) = backend
+        .register_voice("voice:../escape", &clip())
+        .await
+        .unwrap();
+    assert_eq!((status, &body["message"]), (400, &json!("invalid_voice")));
+    assert_eq!(
+        backend.unregister_voice("voice:../escape").await.unwrap(),
+        400
+    );
+    assert_eq!(
+        std::fs::read_dir(backend.private_tmp()).unwrap().count(),
+        0,
+        "nothing was written"
+    );
+}
