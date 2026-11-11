@@ -12,8 +12,8 @@ Mistral's hosted speech models as a backend for
   vocabulary and prompt go to the model with every recording.
 - [**Voxtral TTS 3**](https://docs.mistral.ai/studio/audio/text-to-speech/overview)
   to read text aloud: `voxtral-mini-tts-3`, with Mistral's 36 preset voices in
-  22 languages, or in a [voice cloned](#cloned-voices) from your own
-  recording. The audio streams back as Mistral makes it.
+  22 languages. Or **in your own voice**: record a few seconds, and it speaks
+  like you. The audio streams back as Mistral makes it.
 
 Everything goes to Mistral, so it needs an API key and a connection rather
 than a GPU.
@@ -21,28 +21,6 @@ than a GPU.
 The transcription models replace `voxtral-mini-latest` and
 `voxtral-mini-transcribe-realtime-2602`, which Mistral has deprecated and
 retires on April 30, 2027.
-
-## Cloned voices
-
-Add a voice in Super Voice from a recording of your own, then pick it for
-`voxtral-mini-tts-3`. Mistral clones it from the recording on the spot: there
-is nothing to train and nothing to upload ahead of time.
-
-Where your recording goes:
-
-- **Your machine.** Super Voice keeps the recording, in its voice library, until
-  you delete it.
-- **This backend, while the model is loaded.** The first time you speak in the
-  voice, Super Voice hands the backend up to 15 s of the recording. The backend
-  keeps it in a private folder that no other backend sees, which is in memory
-  on Linux, and which is deleted when the model unloads.
-- **Mistral, with every sentence in that voice.** The clip goes along as the
-  reference audio. Mistral clones from it for that sentence and does not save
-  it as a voice: none is created in your Mistral account. Mistral's terms
-  govern what it keeps of a request otherwise.
-
-Only the audio goes to Mistral. Its API takes no transcript, so one stored
-with the recording stays on your machine.
 
 ## What it is
 
@@ -54,10 +32,7 @@ no network access but `api.mistral.ai`.
 
 ## Requirements
 
-A Mistral API key, and Super Voice newer than 0.3.0-beta.4. This version keeps
-cloned voices in the private folder that Super Voice gives a WebAssembly
-backend, and a Super Voice without that folder does not load the backend at
-all.
+A Mistral API key, and Super Voice newer than 0.3.0-beta.4.
 
 ## License
 
