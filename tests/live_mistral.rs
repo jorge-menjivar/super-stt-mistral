@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Optional live test against the real Mistral API. Gated behind
-//! `SUPER_STT_TEST_MISTRAL=1` + `MISTRAL_API_KEY` + a WAV at
-//! `SUPER_STT_TEST_AUDIO`; self-skips otherwise (so it never runs in CI). Run:
-//!   SUPER_STT_TEST_MISTRAL=1 MISTRAL_API_KEY=... \
-//!   SUPER_STT_TEST_AUDIO=/path/to/mono.wav just test -- --nocapture
-//! Optionally set `SUPER_STT_TEST_EXPECT` to a phrase the result must contain.
+//! `SUPER_VOICE_TEST_MISTRAL=1` + `MISTRAL_API_KEY` + a WAV at
+//! `SUPER_VOICE_TEST_AUDIO`; self-skips otherwise (so it never runs in CI). Run:
+//!   SUPER_VOICE_TEST_MISTRAL=1 MISTRAL_API_KEY=... \
+//!   SUPER_VOICE_TEST_AUDIO=/path/to/mono.wav just test -- --nocapture
+//! Optionally set `SUPER_VOICE_TEST_EXPECT` to a phrase the result must contain.
 #![allow(clippy::doc_markdown)]
 
 mod common;
@@ -15,7 +15,7 @@ const SECRET: &str = "x-voice-secret-mistral_api_key";
 
 #[tokio::test]
 async fn live_mistral() {
-    if std::env::var("SUPER_STT_TEST_MISTRAL").is_err() {
+    if std::env::var("SUPER_VOICE_TEST_MISTRAL").is_err() {
         return;
     }
     let Some(path) = common::component_path() else {
@@ -23,8 +23,8 @@ async fn live_mistral() {
         return;
     };
     let key = std::env::var("MISTRAL_API_KEY").expect("MISTRAL_API_KEY must be set for live test");
-    let audio_path =
-        std::env::var("SUPER_STT_TEST_AUDIO").expect("SUPER_STT_TEST_AUDIO must point to a WAV");
+    let audio_path = std::env::var("SUPER_VOICE_TEST_AUDIO")
+        .expect("SUPER_VOICE_TEST_AUDIO must point to a WAV");
     let (samples, sample_rate) = read_wav_mono_f32(&audio_path);
 
     let mut backend = WasmBackend::new_realtime(
@@ -44,7 +44,7 @@ async fn live_mistral() {
         !text.trim().is_empty(),
         "expected a non-empty transcription"
     );
-    if let Ok(expect) = std::env::var("SUPER_STT_TEST_EXPECT") {
+    if let Ok(expect) = std::env::var("SUPER_VOICE_TEST_EXPECT") {
         assert!(
             text.to_lowercase().contains(&expect.to_lowercase()),
             "transcription {text:?} did not contain {expect:?}"

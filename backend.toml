@@ -1,9 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
-#:schema https://jorge-menjivar.github.io/super-stt/backend.schema.json
+#:schema https://jorge-menjivar.github.io/super-voice/backend.schema.json
 # Mistral backend configuration. See docs/protocol/backend/config.md.
 
 [backend]
-  id          = "app.super-stt.mistral"
+  # The id names the install directory. An install under the old id,
+  # app.super-stt.mistral, moves to this one on update, because the daemon
+  # finds it by `source`.
+  id          = "app.super-voice.mistral"
+  # The repository's old name, which GitHub redirects. `source` is the
+  # backend's identity: installed copies find their updates by it, and the
+  # user's settings, API key and selected model are named by it.
   source      = "github.com/jorge-menjivar/super-stt-mistral"
   name        = "Mistral"
   version     = "0.1.1"

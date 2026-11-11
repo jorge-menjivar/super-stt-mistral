@@ -3,7 +3,7 @@
 //!
 //! The component exports both halves of that world:
 //!
-//! * `wasi:http/incoming-handler` — the Super STT `/v1` batch contract
+//! * `wasi:http/incoming-handler` — the Super Voice `/v1` batch contract
 //!   (`docs/protocol/backend/contract.md`), dispatching on method + path. This
 //!   path is stateless: the daemon injects the API key as the
 //!   `x-voice-secret-mistral_api_key` request header and the model in the
