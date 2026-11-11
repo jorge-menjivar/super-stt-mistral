@@ -28,7 +28,7 @@ use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use wasmtime::component::{Component, Linker, Resource, ResourceTable};
 use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::WasiHttpCtx;
 use wasmtime_wasi_http::p2::bindings::http::types::{ErrorCode, Scheme};
 use wasmtime_wasi_http::p2::body::HyperOutgoingBody;
@@ -624,6 +624,10 @@ pub struct WasmBackend {
     allow_loopback: bool,
     transcribe_headers: Vec<(String, String)>,
     model_id: String,
+    /// The component's private `/tmp`, as the daemon gives one to a
+    /// component that imports `wasi:filesystem`: one directory per loaded
+    /// backend, seen by every request to it, gone when it is dropped.
+    private_tmp: tempfile::TempDir,
 }
 
 impl WasmBackend {
@@ -658,7 +662,14 @@ impl WasmBackend {
             allow_loopback: false,
             transcribe_headers,
             model_id,
+            private_tmp: tempfile::tempdir()?,
         })
+    }
+
+    /// Where the component's private `/tmp` is on the host.
+    #[must_use]
+    pub fn private_tmp(&self) -> &std::path::Path {
+        self.private_tmp.path()
     }
 
     /// Permit egress to loopback (for a mock upstream bound to 127.0.0.1). Off
@@ -670,9 +681,17 @@ impl WasmBackend {
     }
 
     fn new_host(&self) -> Host {
+        let mut wasi = WasiCtx::builder();
+        wasi.preopened_dir(
+            self.private_tmp.path(),
+            "/tmp",
+            DirPerms::all(),
+            FilePerms::all(),
+        )
+        .expect("preopen the private /tmp");
         Host {
             table: ResourceTable::new(),
-            wasi: WasiCtx::builder().build(),
+            wasi: wasi.build(),
             http: WasiHttpCtx::new(),
             hooks: AllowlistHooks {
                 allowed_hosts: self.allowed_hosts.clone(),
@@ -794,6 +813,58 @@ impl WasmBackend {
                 .unwrap_or("transcription failed");
             bail!("{msg}");
         }
+    }
+
+    /// The headers every voice and speech route carries: the backend's
+    /// secrets and options, the model, and the JSON content type.
+    fn voice_headers(&self) -> Vec<(String, String)> {
+        let mut headers = self.transcribe_headers.clone();
+        headers.push(("x-voice-model".to_string(), self.model_id.clone()));
+        headers.push(("content-type".to_string(), "application/json".to_string()));
+        headers
+    }
+
+    /// `POST /v1/voices`: register a cloned voice's clip, s16le mono at 24
+    /// kHz, as the daemon does once per voice per load. Answers the status
+    /// and the JSON body.
+    ///
+    /// # Errors
+    /// If the component cannot be invoked.
+    pub async fn register_voice(
+        &self,
+        voice: &str,
+        pcm: &[u8],
+    ) -> Result<(u16, serde_json::Value)> {
+        use base64::Engine as _;
+        let body = serde_json::json!({
+            "voice": voice,
+            "sample_rate": 24000,
+            "channels": 1,
+            "format": "s16le",
+            "audio": base64::engine::general_purpose::STANDARD.encode(pcm),
+        });
+        let (status, body) = self
+            .invoke(
+                "POST",
+                "/v1/voices",
+                &self.voice_headers(),
+                serde_json::to_vec(&body)?,
+            )
+            .await?;
+        Ok((status, serde_json::from_slice(&body).unwrap_or_default()))
+    }
+
+    /// `DELETE /v1/voices/{voice}`, the id percent-encoded as the daemon
+    /// sends it. Answers the status.
+    ///
+    /// # Errors
+    /// If the component cannot be invoked.
+    pub async fn unregister_voice(&self, voice: &str) -> Result<u16> {
+        let path = format!("/v1/voices/{}", voice.replace(':', "%3A"));
+        let (status, _) = self
+            .invoke("DELETE", &path, &self.voice_headers(), Vec::new())
+            .await?;
+        Ok(status)
     }
 
     /// `POST /v1/synthesize` with `request` as the body. The guest call and the
