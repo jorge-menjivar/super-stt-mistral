@@ -583,7 +583,7 @@ pub struct WasmBackend {
 
 impl WasmBackend {
     /// Load a realtime component the way the daemon does: secrets/options are
-    /// the already-formed `x-stt-secret-*` / `x-stt-option-*` header pairs.
+    /// the already-formed `x-voice-secret-*` / `x-voice-option-*` header pairs.
     ///
     /// # Errors
     /// Returns an error if the component cannot be loaded or linked.
@@ -730,7 +730,7 @@ impl WasmBackend {
         }
         let body = serde_json::to_vec(&payload)?;
         let mut headers = self.transcribe_headers.clone();
-        headers.push(("x-stt-model".to_string(), self.model_id.clone()));
+        headers.push(("x-voice-model".to_string(), self.model_id.clone()));
         let (status, resp) = self
             .invoke("POST", "/v1/transcribe", &headers, body)
             .await?;
@@ -767,7 +767,7 @@ impl WasmBackend {
             .map(|(k, v)| (k.clone(), v.clone().into_bytes()))
             .collect();
         headers.push((
-            "x-stt-model".to_string(),
+            "x-voice-model".to_string(),
             self.model_id.clone().into_bytes(),
         ));
         let consumer = store

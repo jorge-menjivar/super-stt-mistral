@@ -50,16 +50,17 @@ impl WsServerGuest for super::Component {
 }
 
 fn run(headers: &[(String, Vec<u8>)], consumer: &ConsumerStream) -> Result<(), WsError> {
-    let Some(api_key) = crate::header(headers, "x-stt-secret-mistral_api_key") else {
+    let Some(api_key) = crate::header(headers, "x-voice-secret-mistral_api_key") else {
         let _ = consumer.send_text(&crate::error_json("missing mistral api key"));
         return Ok(());
     };
     // Internal test seam: `base_url` is not a declared manifest option, so the
     // daemon never sends this header in production — the default is always used.
     // The realtime round-trip test injects it to reach a mock upstream.
-    let base_url = crate::header(headers, "x-stt-option-base_url")
+    let base_url = crate::header(headers, "x-voice-option-base_url")
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-    let model = crate::header(headers, "x-stt-model").unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let model =
+        crate::header(headers, "x-voice-model").unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
     // 1. Read and validate the consumer's `start` frame. Mistral needs no
     //    session config — the model is in the URL and PCM s16le/16 kHz is

@@ -10,8 +10,8 @@ use common::WasmBackend;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
-const SECRET: &str = "x-stt-secret-mistral_api_key";
-const BASE_URL: &str = "x-stt-option-base_url";
+const SECRET: &str = "x-voice-secret-mistral_api_key";
+const BASE_URL: &str = "x-voice-option-base_url";
 
 /// A `wiremock` matcher asserting the request body contains `needle`. Decodes
 /// lossily because the multipart body carries binary WAV bytes (invalid UTF-8);
@@ -43,7 +43,7 @@ async fn transcribe_round_trip() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/audio/transcriptions"))
-        // Proves the component forwarded the injected x-stt-secret-mistral_api_key
+        // Proves the component forwarded the injected x-voice-secret-mistral_api_key
         // as the upstream bearer token.
         .and(header("authorization", "Bearer test-key"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -69,6 +69,46 @@ async fn transcribe_round_trip() {
     let audio = vec![0.0_f32; 1600];
     let text = backend
         .transcribe_audio(&audio, 16000)
+        .await
+        .expect("transcription should succeed");
+    assert_eq!(text, "hello world");
+}
+
+/// A Super STT daemon sends its headers only under their `x-stt-` names: the
+/// key and the endpoint still reach the upstream.
+#[tokio::test]
+async fn the_super_stt_header_names_still_work() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/transcriptions"))
+        .and(header("authorization", "Bearer old-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "text": "hello world"
+        })))
+        .mount(&server)
+        .await;
+
+    let authority = server.address().to_string();
+    let mut backend = WasmBackend::new_realtime(
+        &component_or_skip!(),
+        vec![authority.clone()],
+        "voxtral-mini-latest".to_string(),
+        vec![
+            (
+                "x-stt-secret-mistral_api_key".to_string(),
+                "old-key".to_string(),
+            ),
+            (
+                "x-stt-option-base_url".to_string(),
+                format!("http://{authority}"),
+            ),
+        ],
+    )
+    .expect("load backend")
+    .permit_loopback_egress();
+
+    let text = backend
+        .transcribe_audio(&[0.0_f32; 1600], 16000)
         .await
         .expect("transcription should succeed");
     assert_eq!(text, "hello world");

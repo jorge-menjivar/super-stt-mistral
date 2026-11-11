@@ -68,7 +68,7 @@ fn route(request: &IncomingRequest) -> (u16, Vec<u8>) {
 /// the audio body, forward to Mistral, and return the transcription.
 fn transcribe(request: &IncomingRequest) -> (u16, Vec<u8>) {
     let entries = request.headers().entries();
-    let Some(api_key) = crate::header(&entries, "x-stt-secret-mistral_api_key") else {
+    let Some(api_key) = crate::header(&entries, "x-voice-secret-mistral_api_key") else {
         // Include a human-readable `detail` that the daemon surfaces to the user.
         return (
             400,
@@ -82,10 +82,10 @@ fn transcribe(request: &IncomingRequest) -> (u16, Vec<u8>) {
     // Internal test seam: `base_url` is not a declared manifest option, so the
     // daemon never sends this header in production — the default is always used.
     // The round-trip tests inject it to reach a mock upstream.
-    let base_url = crate::header(&entries, "x-stt-option-base_url")
+    let base_url = crate::header(&entries, "x-voice-option-base_url")
         .unwrap_or_else(|| "https://api.mistral.ai".to_string());
-    let model =
-        crate::header(&entries, "x-stt-model").unwrap_or_else(|| "voxtral-mini-latest".to_string());
+    let model = crate::header(&entries, "x-voice-model")
+        .unwrap_or_else(|| "voxtral-mini-latest".to_string());
 
     let Ok(body) = request.consume() else {
         return err(400, "no_body");

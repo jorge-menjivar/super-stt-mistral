@@ -8,7 +8,7 @@ mod common;
 
 use common::WasmBackend;
 
-const SECRET: &str = "x-stt-secret-mistral_api_key";
+const SECRET: &str = "x-voice-secret-mistral_api_key";
 
 /// Yield the component path or skip (CI builds it via `just build-component`).
 macro_rules! component_or_skip {

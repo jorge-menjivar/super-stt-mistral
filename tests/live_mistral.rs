@@ -11,7 +11,7 @@ mod common;
 
 use common::WasmBackend;
 
-const SECRET: &str = "x-stt-secret-mistral_api_key";
+const SECRET: &str = "x-voice-secret-mistral_api_key";
 
 #[tokio::test]
 async fn live_mistral() {

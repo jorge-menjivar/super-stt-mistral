@@ -88,7 +88,7 @@ async fn realtime_round_trip() {
     let path = component_or_skip!();
     let (authority, _mock) = start_mock_upstream().await;
 
-    // The guest builds the upstream URL from x-stt-option-base_url. Point it at
+    // The guest builds the upstream URL from x-voice-option-base_url. Point it at
     // the mock over plaintext ws:// (http:// -> ws:// in the guest). The mock is
     // on loopback, which the SSRF guard blocks for untrusted backends, so the
     // test opts in via `permit_loopback_egress` below.
@@ -98,11 +98,11 @@ async fn realtime_round_trip() {
         "voxtral-mini-transcribe-realtime-2602".to_string(),
         vec![
             (
-                "x-stt-secret-mistral_api_key".to_string(),
+                "x-voice-secret-mistral_api_key".to_string(),
                 "test-key".to_string(),
             ),
             (
-                "x-stt-option-base_url".to_string(),
+                "x-voice-option-base_url".to_string(),
                 format!("http://{authority}"),
             ),
         ],
@@ -242,11 +242,11 @@ fn realtime_backend(authority: &str) -> WasmBackend {
         "voxtral-mini-transcribe-realtime-2602".to_string(),
         vec![
             (
-                "x-stt-secret-mistral_api_key".to_string(),
+                "x-voice-secret-mistral_api_key".to_string(),
                 "test-key".to_string(),
             ),
             (
-                "x-stt-option-base_url".to_string(),
+                "x-voice-option-base_url".to_string(),
                 format!("http://{authority}"),
             ),
         ],

@@ -6,7 +6,7 @@
 //! * `wasi:http/incoming-handler` — the Super STT `/v1` batch contract
 //!   (`docs/protocol/backend/contract.md`), dispatching on method + path. This
 //!   path is stateless: the daemon injects the API key as the
-//!   `x-stt-secret-mistral_api_key` request header and the model in the
+//!   `x-voice-secret-mistral_api_key` request header and the model in the
 //!   transcribe body, and the component forwards audio to the Mistral
 //!   transcription API over `wasi:http/outgoing-handler`.
 //! * `super-stt:realtime/ws-server` — the realtime WebSocket session handler.
@@ -30,12 +30,22 @@ mod component;
 // ── batch helpers (pure; host-compiled + unit-tested) ───────────────────────
 
 /// Case-insensitive header lookup over a `(name, value)` list.
+///
+/// `want` is the Super Voice name, `x-voice-…`. A request without it is looked
+/// up under its Super STT name, `x-stt-…`: a Super Voice daemon sends every
+/// header under both, and a Super STT daemon only under the old one.
 #[must_use]
 pub fn header(entries: &[(String, Vec<u8>)], want: &str) -> Option<String> {
-    entries
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(want))
-        .map(|(_, v)| String::from_utf8_lossy(v).into_owned())
+    let find = |name: &str| {
+        entries
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| String::from_utf8_lossy(v).into_owned())
+    };
+    find(want).or_else(|| {
+        let rest = want.strip_prefix("x-voice-")?;
+        find(&format!("x-stt-{rest}"))
+    })
 }
 
 /// Split a base URL into `(is_https, authority)`, where authority is
@@ -252,9 +262,29 @@ pub fn classify_upstream_event(s: &str) -> UpstreamEvent {
 #[cfg(test)]
 mod tests {
     use super::{
-        UpstreamEvent, build_multipart, classify_upstream_event, encode_wav, is_stop, parse_base,
-        parse_start, parse_transcript, ws_url,
+        UpstreamEvent, build_multipart, classify_upstream_event, encode_wav, header, is_stop,
+        parse_base, parse_start, parse_transcript, ws_url,
     };
+
+    /// A Super Voice daemon sends each header under its `x-voice-` name and its
+    /// `x-stt-` one; a Super STT daemon under the old one alone.
+    #[test]
+    fn a_header_is_read_under_its_super_voice_name_or_its_super_stt_one() {
+        let entry = |k: &str, v: &str| (k.to_string(), v.as_bytes().to_vec());
+        let voice = [entry("X-Voice-Model", "voxtral-mini-transcribe-3")];
+        assert_eq!(
+            header(&voice, "x-voice-model").as_deref(),
+            Some("voxtral-mini-transcribe-3")
+        );
+        let stt = [entry("x-stt-model", "voxtral-mini-latest")];
+        assert_eq!(
+            header(&stt, "x-voice-model").as_deref(),
+            Some("voxtral-mini-latest")
+        );
+        let both = [entry("x-stt-model", "old"), entry("x-voice-model", "new")];
+        assert_eq!(header(&both, "x-voice-model").as_deref(), Some("new"));
+        assert_eq!(header(&stt, "x-voice-prompt"), None);
+    }
 
     #[test]
     fn encode_wav_header_and_clamping() {
