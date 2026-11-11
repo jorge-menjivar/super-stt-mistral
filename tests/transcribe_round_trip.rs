@@ -12,6 +12,8 @@ use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
 const SECRET: &str = "x-voice-secret-mistral_api_key";
 const BASE_URL: &str = "x-voice-option-base_url";
+const PROMPT: &str = "x-voice-prompt";
+const VOCABULARY: &str = "x-voice-vocabulary";
 
 /// A `wiremock` matcher asserting the request body contains `needle`. Decodes
 /// lossily because the multipart body carries binary WAV bytes (invalid UTF-8);
@@ -20,6 +22,14 @@ struct BodyContains(&'static str);
 impl Match for BodyContains {
     fn matches(&self, req: &Request) -> bool {
         String::from_utf8_lossy(&req.body).contains(self.0)
+    }
+}
+
+/// The inverse of [`BodyContains`], for a field that must not be sent at all.
+struct NoBodyContains(&'static str);
+impl Match for NoBodyContains {
+    fn matches(&self, req: &Request) -> bool {
+        !String::from_utf8_lossy(&req.body).contains(self.0)
     }
 }
 
@@ -111,6 +121,99 @@ async fn the_super_stt_header_names_still_work() {
         .transcribe_audio(&[0.0_f32; 1600], 16000)
         .await
         .expect("transcription should succeed");
+    assert_eq!(text, "hello world");
+}
+
+/// The dictation context reaches Mistral as `context_bias` fields: the terms,
+/// a phrase kept whole and an escaped term decoded, then the prompt.
+#[tokio::test]
+async fn the_dictation_context_is_sent_as_context_bias() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/transcriptions"))
+        .and(BodyContains("name=\"context_bias\"\r\n\r\nSuper Libre\r\n"))
+        .and(BodyContains("\r\n\r\ncaf\u{e9}\r\n"))
+        .and(BodyContains("\r\n\r\nA product announcement.\r\n"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "text": "The Super Libre team shipped it."
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let authority = server.address().to_string();
+    let mut backend = WasmBackend::new_realtime(
+        &component_or_skip!(),
+        vec![authority.clone()],
+        "voxtral-mini-transcribe-3".to_string(),
+        vec![
+            (SECRET.to_string(), "test-key".to_string()),
+            (BASE_URL.to_string(), format!("http://{authority}")),
+            // Exactly as the daemon injects them: JSON, escaped to pure ASCII.
+            (
+                PROMPT.to_string(),
+                r#""A product announcement.""#.to_string(),
+            ),
+            (
+                VOCABULARY.to_string(),
+                r#"["Super Libre","caf\u00e9"]"#.to_string(),
+            ),
+        ],
+    )
+    .expect("load backend")
+    .permit_loopback_egress();
+
+    let text = backend
+        .transcribe_audio(&[0.0_f32; 1600], 16000)
+        .await
+        .expect("transcription should succeed");
+    assert_eq!(text, "The Super Libre team shipped it.");
+}
+
+/// A context Mistral refuses costs the context, not the recording: the
+/// request goes again without it.
+#[tokio::test]
+async fn a_refused_context_costs_the_context_not_the_recording() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/transcriptions"))
+        .and(BodyContains("context_bias"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "object": "error",
+            "message": "Prompt too long.",
+            "type": "invalid_request_prompt_too_long"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/transcriptions"))
+        .and(NoBodyContains("context_bias"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "text": "hello world"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let authority = server.address().to_string();
+    let mut backend = WasmBackend::new_realtime(
+        &component_or_skip!(),
+        vec![authority.clone()],
+        "voxtral-mini-transcribe-3".to_string(),
+        vec![
+            (SECRET.to_string(), "test-key".to_string()),
+            (BASE_URL.to_string(), format!("http://{authority}")),
+            (VOCABULARY.to_string(), r#"["Kokoro"]"#.to_string()),
+        ],
+    )
+    .expect("load backend")
+    .permit_loopback_egress();
+
+    let text = backend
+        .transcribe_audio(&[0.0_f32; 1600], 16000)
+        .await
+        .expect("the recording must still be transcribed");
     assert_eq!(text, "hello world");
 }
 

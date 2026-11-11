@@ -19,6 +19,11 @@
 [capabilities]
   websocket = true
 
+  # Opts into being handed the user's dictation context as `x-voice-prompt` and
+  # `x-voice-vocabulary`. Both go to Mistral as `context_bias` entries, the
+  # terms and then the prompt, on recordings and on realtime sessions.
+  context   = true
+
 [assets]
   wasm = "mistral.wasm"
 

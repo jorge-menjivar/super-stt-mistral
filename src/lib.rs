@@ -88,10 +88,52 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     buf
 }
 
-/// Build a `multipart/form-data` body with `model`, an optional `language`, and
-/// `file` (audio.wav).
+// ── dictation context (pure; host-compiled + unit-tested) ───────────────────
+
+/// The most `context_bias` entries Mistral takes.
+pub const MAX_CONTEXT_BIAS: usize = 100;
+
+/// The user's dictation context as Mistral's `context_bias` entries: the
+/// vocabulary's terms, then the prompt.
+///
+/// `raw_prompt` is `x-voice-prompt` (a JSON string) and `raw_vocabulary` is
+/// `x-voice-vocabulary` (a JSON array of strings), as the daemon injects them.
+/// A header that will not parse is dropped rather than failing the request: a
+/// malformed context is the daemon's bug, and the user's audio should still be
+/// transcribed.
+///
+/// Mistral has one field for both halves. Its guide gives it keyphrases, names
+/// spelled the way they should come out, and a sentence describing the
+/// recording, all as entries of the same list, so the prompt becomes one more
+/// entry. The terms come first, because the list holds at most
+/// [`MAX_CONTEXT_BIAS`] entries and they are the half that fixes spellings.
+/// Each entry is one line, and an entry repeated is sent once.
 #[must_use]
-pub fn build_multipart(boundary: &str, model: &str, language: Option<&str>, wav: &[u8]) -> Vec<u8> {
+pub fn context_bias(raw_prompt: Option<&str>, raw_vocabulary: Option<&str>) -> Vec<String> {
+    let terms: Vec<String> = raw_vocabulary
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+        .unwrap_or_default();
+    let prompt = raw_prompt.and_then(|raw| serde_json::from_str::<String>(raw).ok());
+    let mut entries: Vec<String> = Vec::new();
+    for entry in terms.iter().chain(prompt.as_ref()) {
+        let line = entry.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !line.is_empty() && !entries.contains(&line) && entries.len() < MAX_CONTEXT_BIAS {
+            entries.push(line);
+        }
+    }
+    entries
+}
+
+/// Build a `multipart/form-data` body with `model`, an optional `language`, a
+/// `context_bias` field per entry, and `file` (audio.wav).
+#[must_use]
+pub fn build_multipart(
+    boundary: &str,
+    model: &str,
+    language: Option<&str>,
+    context_bias: &[String],
+    wav: &[u8],
+) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
@@ -101,6 +143,12 @@ pub fn build_multipart(boundary: &str, model: &str, language: Option<&str>, wav:
         body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         body.extend_from_slice(b"Content-Disposition: form-data; name=\"language\"\r\n\r\n");
         body.extend_from_slice(lang.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+    for entry in context_bias {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(b"Content-Disposition: form-data; name=\"context_bias\"\r\n\r\n");
+        body.extend_from_slice(entry.as_bytes());
         body.extend_from_slice(b"\r\n");
     }
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
@@ -190,6 +238,22 @@ pub fn is_stop(s: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The `session.update` that hands a realtime session the dictation context,
+/// sent before any audio: Mistral refuses a change to the session once audio
+/// has started. The audio format is the one the session assumes without it,
+/// PCM s16le at 16 kHz.
+#[must_use]
+pub fn session_update_json(context_bias: &[String]) -> String {
+    json!({
+        "type": "session.update",
+        "session": {
+            "audio_format": { "encoding": "pcm_s16le", "sample_rate": 16000 },
+            "context_bias": context_bias,
+        },
+    })
+    .to_string()
+}
+
 /// Consumer `preview` frame (incremental transcript).
 #[must_use]
 pub fn preview_json(text: &str) -> String {
@@ -262,9 +326,89 @@ pub fn classify_upstream_event(s: &str) -> UpstreamEvent {
 #[cfg(test)]
 mod tests {
     use super::{
-        UpstreamEvent, build_multipart, classify_upstream_event, encode_wav, header, is_stop,
-        parse_base, parse_start, parse_transcript, ws_url,
+        MAX_CONTEXT_BIAS, UpstreamEvent, build_multipart, classify_upstream_event, context_bias,
+        encode_wav, header, is_stop, parse_base, parse_start, parse_transcript,
+        session_update_json, ws_url,
     };
+
+    /// The terms lead, the prompt follows, each one line and once, decoded
+    /// from the JSON the daemon escapes to ASCII.
+    #[test]
+    fn the_context_becomes_bias_entries_terms_first() {
+        let entries = context_bias(
+            Some(r#""A product\nannouncement.""#),
+            Some(r#"["Super Libre","Kokoro"," ","Kokoro","caf\u00e9"]"#),
+        );
+        assert_eq!(
+            entries,
+            [
+                "Super Libre",
+                "Kokoro",
+                "caf\u{e9}",
+                "A product announcement."
+            ]
+        );
+    }
+
+    #[test]
+    fn either_half_stands_alone_and_nothing_is_nothing() {
+        assert_eq!(context_bias(Some(r#""Notes""#), None), ["Notes"]);
+        assert_eq!(context_bias(None, Some(r#"["CubeCL"]"#)), ["CubeCL"]);
+        assert!(context_bias(None, None).is_empty());
+        assert!(context_bias(Some(r#""  ""#), Some("[]")).is_empty());
+    }
+
+    /// A header that will not parse costs that half of the context, not the
+    /// request.
+    #[test]
+    fn an_unreadable_half_is_left_out() {
+        assert_eq!(
+            context_bias(Some("not json"), Some(r#"["kept"]"#)),
+            ["kept"]
+        );
+        assert_eq!(
+            context_bias(Some(r#""kept""#), Some(r#""not a list""#)),
+            ["kept"]
+        );
+    }
+
+    /// Mistral takes at most a hundred entries; the terms fill them first, so
+    /// a long vocabulary crowds out the prompt rather than its own tail.
+    #[test]
+    fn the_list_stops_at_its_limit() {
+        let terms: Vec<String> = (0..150).map(|i| format!("term{i}")).collect();
+        let entries = context_bias(
+            Some(r#""a prompt""#),
+            Some(&serde_json::to_string(&terms).unwrap()),
+        );
+        assert_eq!(entries.len(), MAX_CONTEXT_BIAS);
+        assert_eq!(entries[99], "term99");
+    }
+
+    #[test]
+    fn build_multipart_sends_a_field_per_bias_entry() {
+        let bias = [
+            "Super Libre".to_string(),
+            "A product announcement.".to_string(),
+        ];
+        let body = build_multipart("BOUND", "voxtral-mini-transcribe-3", None, &bias, b"WAV");
+        let s = String::from_utf8_lossy(&body);
+        assert_eq!(s.matches("name=\"context_bias\"").count(), 2);
+        assert!(s.contains("name=\"context_bias\"\r\n\r\nSuper Libre\r\n"));
+        assert!(s.contains("\r\n\r\nA product announcement.\r\n"));
+        let none = build_multipart("BOUND", "voxtral-mini-transcribe-3", None, &[], b"WAV");
+        assert!(!String::from_utf8_lossy(&none).contains("context_bias"));
+    }
+
+    #[test]
+    fn the_session_update_carries_the_bias_and_the_assumed_format() {
+        let v: serde_json::Value =
+            serde_json::from_str(&session_update_json(&["Kokoro".to_string()])).unwrap();
+        assert_eq!(v["type"], "session.update");
+        assert_eq!(v["session"]["context_bias"][0], "Kokoro");
+        assert_eq!(v["session"]["audio_format"]["encoding"], "pcm_s16le");
+        assert_eq!(v["session"]["audio_format"]["sample_rate"], 16000);
+    }
 
     /// A Super Voice daemon sends each header under its `x-voice-` name and its
     /// `x-stt-` one; a Super STT daemon under the old one alone.
@@ -328,7 +472,7 @@ mod tests {
 
     #[test]
     fn build_multipart_has_model_and_file_parts() {
-        let body = build_multipart("BOUND", "voxtral-mini-transcribe-3", None, b"WAVDATA");
+        let body = build_multipart("BOUND", "voxtral-mini-transcribe-3", None, &[], b"WAVDATA");
         let s = String::from_utf8_lossy(&body);
         assert!(s.starts_with("--BOUND\r\n"));
         assert!(s.contains("name=\"model\""));
@@ -342,7 +486,13 @@ mod tests {
 
     #[test]
     fn build_multipart_includes_language_when_present() {
-        let body = build_multipart("BOUND", "voxtral-mini-transcribe-3", Some("es"), b"WAVDATA");
+        let body = build_multipart(
+            "BOUND",
+            "voxtral-mini-transcribe-3",
+            Some("es"),
+            &[],
+            b"WAVDATA",
+        );
         let s = String::from_utf8_lossy(&body);
         assert!(s.contains("name=\"language\""));
         assert!(s.contains("\r\n\r\nes\r\n"));
