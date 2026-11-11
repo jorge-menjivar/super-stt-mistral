@@ -15,9 +15,12 @@
   version     = "0.2.0"
   kind        = "wasm"
   entrypoint  = "mistral.wasm"
-  contract    = "v2"
+  product     = "super-voice"
+  # v4 for text to speech: `role = "synthesis"`, its model keys and
+  # `POST /v1/synthesize`. It needs Super Voice 0.3.0.
+  contract    = "v4"
   license     = "GPL-3.0-only"
-  description = "Cloud speech-to-text via the Mistral (Voxtral) API."
+  description = "Cloud speech-to-text and text-to-speech via the Mistral (Voxtral) API."
 
 [network]
   allowed_hosts = ["api.mistral.ai"]
@@ -25,9 +28,10 @@
 [capabilities]
   websocket = true
 
-  # Opts into being handed the user's dictation context as `x-voice-prompt` and
-  # `x-voice-vocabulary`. Both go to Mistral as `context_bias` entries, the
-  # terms and then the prompt, on recordings and on realtime sessions.
+  # Speech to text. Opts into being handed the user's dictation context as
+  # `x-voice-prompt` and `x-voice-vocabulary`. Both go to Mistral as
+  # `context_bias` entries, the terms and then the prompt, on recordings and on
+  # realtime sessions.
   context   = true
 
 [assets]
@@ -45,6 +49,7 @@
 # 2027-04-30.
 [[models]]
   name                = "voxtral-mini-transcribe-3"
+  role                = "transcription"
   provider            = "mistral"
   multilingual        = true
   primary_language    = "en"
@@ -67,6 +72,7 @@
 
 [[models]]
   name                = "voxtral-small-transcribe-3"
+  role                = "transcription"
   provider            = "mistral"
   multilingual        = true
   primary_language    = "en"
@@ -89,6 +95,7 @@
 
 [[models]]
   name                = "voxtral-mini-transcribe-realtime-3"
+  role                = "transcription"
   provider            = "mistral"
   multilingual        = true
   primary_language    = "en"
@@ -109,3 +116,278 @@
   ]
   supported_devices   = ["none"]
   realtime            = true
+
+# Voxtral TTS 3. Mistral streams it as 24 kHz mono float PCM, which the
+# component passes on as it arrives. The voice decides the language: the API
+# takes no language, so the setting only says what the text is in. Any voice
+# reads any of these languages.
+#
+# `max_input_chars` keeps one answer well under the daemon's 32 MiB: 2000
+# characters are about two minutes of speech, 12 MB of float PCM. Mistral
+# starts streaming about 2.5 s in however long the text is, so a larger chunk
+# costs no latency, and the daemon already sends a short first one.
+[[models]]
+  name                = "voxtral-mini-tts-3"
+  role                = "synthesis"
+  multilingual        = true
+  primary_language    = "en"
+  supported_languages = [
+    "en",
+    "ar",
+    "bg",
+    "ca",
+    "cs",
+    "da",
+    "de",
+    "el",
+    "es",
+    "fi",
+    "fil",
+    "fr",
+    "hi",
+    "hr",
+    "hu",
+    "id",
+    "is",
+    "it",
+    "ja",
+    "ko",
+    "lb",
+    "lv",
+    "nl",
+    "no",
+    "pl",
+    "pt",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "sv",
+    "ta",
+    "th",
+    "tr",
+    "uk",
+    "ur",
+    "vi",
+    "zh"
+  ]
+  supported_devices   = ["none"]
+  max_input_chars     = 2000
+  output_sample_rate  = 24000
+  default_voice       = "voice_478"
+
+  [[models.voices]]
+    id       = "voice_3150"
+    label    = "James (American, male)"
+    language = "en"
+    tags     = ["american", "male"]
+
+  [[models.voices]]
+    id       = "voice_447"
+    label    = "Margaret (American, female)"
+    language = "en"
+    tags     = ["american", "female"]
+
+  [[models.voices]]
+    id       = "voice_485"
+    label    = "Rob (American, male)"
+    language = "en"
+    tags     = ["american", "male"]
+
+  [[models.voices]]
+    id       = "voice_478"
+    label    = "Sheila (American, female)"
+    language = "en"
+    tags     = ["american", "female"]
+
+  [[models.voices]]
+    id       = "voice_1788"
+    label    = "David (British, male)"
+    language = "en"
+    tags     = ["british", "male"]
+
+  [[models.voices]]
+    id       = "voice_591"
+    label    = "Fred (British, male)"
+    language = "en"
+    tags     = ["british", "male"]
+
+  [[models.voices]]
+    id       = "voice_590"
+    label    = "Harriet (British, female)"
+    language = "en"
+    tags     = ["british", "female"]
+
+  [[models.voices]]
+    id       = "voice_3147"
+    label    = "Howard (British, male)"
+    language = "en"
+    tags     = ["british", "male"]
+
+  [[models.voices]]
+    id       = "voice_3149"
+    label    = "Hugo (British, male)"
+    language = "en"
+    tags     = ["british", "male"]
+
+  [[models.voices]]
+    id       = "voice_1787"
+    label    = "Mary (British, female)"
+    language = "en"
+    tags     = ["british", "female"]
+
+  [[models.voices]]
+    id       = "voice_1786"
+    label    = "Sky (British, female)"
+    language = "en"
+    tags     = ["british", "female"]
+
+  [[models.voices]]
+    id       = "voice_479"
+    label    = "Maryam (Arabic, female)"
+    language = "ar"
+    tags     = ["arabic", "female"]
+
+  [[models.voices]]
+    id       = "voice_3143"
+    label    = "Jordi (Catalan, male)"
+    language = "ca"
+    tags     = ["catalan", "male"]
+
+  [[models.voices]]
+    id       = "voice_481"
+    label    = "Heidi (German, female)"
+    language = "de"
+    tags     = ["german", "female"]
+
+  [[models.voices]]
+    id       = "voice_483"
+    label    = "Elena (Spanish, female)"
+    language = "es"
+    tags     = ["spanish", "female"]
+
+  [[models.voices]]
+    id       = "voice_3141"
+    label    = "Camille (French, female)"
+    language = "fr"
+    tags     = ["french", "female"]
+
+  [[models.voices]]
+    id       = "voice_589"
+    label    = "Lea (French, female)"
+    language = "fr"
+    tags     = ["french", "female"]
+
+  [[models.voices]]
+    id       = "voice_3137"
+    label    = "Manon (French, female)"
+    language = "fr"
+    tags     = ["french", "female"]
+
+  [[models.voices]]
+    id       = "voice_592"
+    label    = "Marie (French, female)"
+    language = "fr"
+    tags     = ["french", "female"]
+
+  [[models.voices]]
+    id       = "voice_3139"
+    label    = "Ananya (Hindi, female)"
+    language = "hi"
+    tags     = ["hindi", "female"]
+
+  [[models.voices]]
+    id       = "voice_3153"
+    label    = "Himanshu (Hindi, male)"
+    language = "hi"
+    tags     = ["hindi", "male"]
+
+  [[models.voices]]
+    id       = "voice_3146"
+    label    = "Olivia (Hungarian, female)"
+    language = "hu"
+    tags     = ["hungarian", "female"]
+
+  [[models.voices]]
+    id       = "voice_482"
+    label    = "Lorenzo (Italian, male)"
+    language = "it"
+    tags     = ["italian", "male"]
+
+  [[models.voices]]
+    id       = "voice_3133"
+    label    = "Haruto (Japanese, male)"
+    language = "ja"
+    tags     = ["japanese", "male"]
+
+  [[models.voices]]
+    id       = "voice_3135"
+    label    = "Jin (Korean, male)"
+    language = "ko"
+    tags     = ["korean", "male"]
+
+  [[models.voices]]
+    id       = "voice_3136"
+    label    = "Sung (Korean, male)"
+    language = "ko"
+    tags     = ["korean", "male"]
+
+  [[models.voices]]
+    id       = "voice_3145"
+    label    = "Lotte (Dutch, female)"
+    language = "nl"
+    tags     = ["dutch", "female"]
+
+  [[models.voices]]
+    id       = "voice_3134"
+    label    = "Lars (Norwegian, male)"
+    language = "no"
+    tags     = ["norwegian", "male"]
+
+  [[models.voices]]
+    id       = "voice_3154"
+    label    = "Leon (Polish, male)"
+    language = "pl"
+    tags     = ["polish", "male"]
+
+  [[models.voices]]
+    id       = "voice_480"
+    label    = "Gabriela (Portuguese, female)"
+    language = "pt"
+    tags     = ["portuguese", "female"]
+
+  [[models.voices]]
+    id       = "voice_3155"
+    label    = "Irina (Romanian, female)"
+    language = "ro"
+    tags     = ["romanian", "female"]
+
+  [[models.voices]]
+    id       = "voice_3132"
+    label    = "Tatiana (Russian, female)"
+    language = "ru"
+    tags     = ["russian", "female"]
+
+  [[models.voices]]
+    id       = "voice_3138"
+    label    = "Oran (Turkish, male)"
+    language = "tr"
+    tags     = ["turkish", "male"]
+
+  [[models.voices]]
+    id       = "voice_3140"
+    label    = "Taras (Ukrainian, male)"
+    language = "uk"
+    tags     = ["ukrainian", "male"]
+
+  [[models.voices]]
+    id       = "voice_3144"
+    label    = "Huong (Vietnamese, female)"
+    language = "vi"
+    tags     = ["vietnamese", "female"]
+
+  [[models.voices]]
+    id       = "voice_3142"
+    label    = "Mei (Chinese, female)"
+    language = "zh"
+    tags     = ["chinese", "female"]

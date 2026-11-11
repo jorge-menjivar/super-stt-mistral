@@ -56,6 +56,51 @@ wasmtime::component::bindgen!({
 
 pub use self::super_engine::realtime::ws::{CloseFrame, WsError, WsFrame};
 
+/// What `POST /v1/synthesize` answered.
+pub struct Synthesis {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl Synthesis {
+    /// A response header, by name.
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The body as `(kind, payload)` frames, the way the daemon reads it.
+    ///
+    /// # Panics
+    /// If the body is not a whole sequence of frames.
+    #[must_use]
+    pub fn frames(&self) -> Vec<(u8, Vec<u8>)> {
+        let mut frames = Vec::new();
+        let mut rest = self.body.as_slice();
+        while !rest.is_empty() {
+            assert!(rest.len() >= 5, "a truncated frame header: {rest:?}");
+            let len = u32::from_le_bytes(rest[1..5].try_into().unwrap()) as usize;
+            assert!(rest.len() >= 5 + len, "a truncated frame payload");
+            frames.push((rest[0], rest[5..5 + len].to_vec()));
+            rest = &rest[5 + len..];
+        }
+        frames
+    }
+
+    /// The body as the JSON error envelope.
+    ///
+    /// # Panics
+    /// If it is not JSON.
+    #[must_use]
+    pub fn json(&self) -> serde_json::Value {
+        serde_json::from_slice(&self.body).expect("a JSON body")
+    }
+}
+
 /// Path to the prebuilt component (`just build-component`), or `None` if it
 /// isn't built — tests skip gracefully in that case so a partial `cargo test`
 /// (no wasm build) still passes; CI builds it first. Pair with `let-else`:
@@ -749,6 +794,65 @@ impl WasmBackend {
                 .unwrap_or("transcription failed");
             bail!("{msg}");
         }
+    }
+
+    /// `POST /v1/synthesize` with `request` as the body. The guest call and the
+    /// read of its body run together, as the daemon runs them: the guest
+    /// streams its audio, so awaiting it first would leave it writing into a
+    /// body nobody reads.
+    ///
+    /// # Errors
+    /// Returns an error if the component cannot be invoked or its response
+    /// cannot be read.
+    pub async fn synthesize(&self, request: &serde_json::Value) -> Result<Synthesis> {
+        let mut store = Store::new(&self.engine, self.new_host());
+        let mut builder = hyper::Request::builder()
+            .method("POST")
+            .uri("http://backend.local/v1/synthesize")
+            .header("content-type", "application/json")
+            .header("x-voice-model", self.model_id.as_str());
+        for (key, value) in &self.transcribe_headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+        let body = bytes::Bytes::from(serde_json::to_vec(request)?);
+        let request = builder
+            .body(
+                http_body_util::Full::new(body)
+                    .map_err(|never: std::convert::Infallible| -> ErrorCode { match never {} }),
+            )
+            .context("building backend request")?;
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let req = store
+            .data_mut()
+            .http()
+            .new_incoming_request(Scheme::Http, request)?;
+        let out = store.data_mut().http().new_response_outparam(tx)?;
+        let inst = self.pre.instantiate_async(&mut store).await?;
+        let guest = inst
+            .wasi_http_incoming_handler()
+            .call_handle(&mut store, req, out);
+        let host = async {
+            let response = rx
+                .await
+                .context("backend produced no response")?
+                .map_err(|e| anyhow!("backend transport error: {e:?}"))?;
+            let status = response.status().as_u16();
+            let headers = response
+                .headers()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or_default().to_string()))
+                .collect();
+            let body = response.into_body().collect().await?.to_bytes().to_vec();
+            anyhow::Ok(Synthesis {
+                status,
+                headers,
+                body,
+            })
+        };
+        let (guest, host) = tokio::join!(guest, host);
+        guest?;
+        host
     }
 
     /// Run one consumer realtime session: instantiate the component and invoke
