@@ -12,7 +12,7 @@
   # user's settings, API key and selected model are named by it.
   source      = "github.com/jorge-menjivar/super-stt-mistral"
   name        = "Mistral"
-  version     = "0.2.0"
+  version     = "0.3.0"
   kind        = "wasm"
   entrypoint  = "mistral.wasm"
   product     = "super-voice"
