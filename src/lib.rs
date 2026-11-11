@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Mistral speech-to-text backend targeting the `super-stt:realtime` world.
+//! Mistral speech-to-text and text-to-speech backend targeting the
+//! `super-engine:realtime` world.
 //!
 //! The component exports both halves of that world:
 //!
-//! * `wasi:http/incoming-handler` — the Super Voice `/v1` batch contract
+//! * `wasi:http/incoming-handler` — the Super Voice `/v1` contract
 //!   (`docs/protocol/backend/contract.md`), dispatching on method + path. This
 //!   path is stateless: the daemon injects the API key as the
-//!   `x-voice-secret-mistral_api_key` request header and the model in the
-//!   transcribe body, and the component forwards audio to the Mistral
-//!   transcription API over `wasi:http/outgoing-handler`.
-//! * `super-stt:realtime/ws-server` — the realtime WebSocket session handler.
+//!   `x-voice-secret-mistral_api_key` request header and the model as
+//!   `x-voice-model`. The component forwards audio to Mistral's transcription
+//!   API, and text to its speech API, over `wasi:http/outgoing-handler`; the
+//!   pure half of speech is [`mod@speech`].
+//! * `super-engine:realtime/ws-server` — the realtime WebSocket session handler.
 //!   It bridges a consumer WebSocket to Mistral's realtime transcription API
-//!   over the daemon-implemented `super-stt:realtime/ws` import.
+//!   over the daemon-implemented `super-engine:realtime/ws` import.
 //!
 //! The `wit-bindgen` / `wasi:http` handler is **wasm-only**, so it lives behind
 //! `#[cfg(target_arch = "wasm32")]` in [`mod@component`]. The pure audio,
@@ -26,6 +28,7 @@ use serde_json::{Value, json};
 
 #[cfg(target_arch = "wasm32")]
 mod component;
+pub mod speech;
 
 // ── batch helpers (pure; host-compiled + unit-tested) ───────────────────────
 

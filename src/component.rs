@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The wasm-only `wasi:http` / `super-stt:realtime` component. Compiled for
+//! The wasm-only `wasi:http` / `super-engine:realtime` component. Compiled for
 //! `wasm32-wasip2` only (the `wit-bindgen` bindings don't build for the host);
 //! the pure helpers it calls live in the crate root and are unit-tested there.
 
@@ -21,17 +21,27 @@ wit_bindgen::generate!({
 
 use exports::wasi::http::incoming_handler::Guest;
 use wasi::http::types::{
-    Fields, IncomingBody, IncomingRequest, Method, OutgoingBody, OutgoingRequest, OutgoingResponse,
-    ResponseOutparam, Scheme,
+    Fields, IncomingBody, IncomingRequest, IncomingResponse, Method, OutgoingBody, OutgoingRequest,
+    OutgoingResponse, ResponseOutparam, Scheme,
 };
 use wasi::io::streams::StreamError;
 
 mod realtime;
+mod synthesize;
+
+/// Mistral's API, unless a test points the component elsewhere.
+const DEFAULT_BASE_URL: &str = "https://api.mistral.ai";
 
 struct Component;
 
 impl Guest for Component {
     fn handle(request: IncomingRequest, outparam: ResponseOutparam) {
+        // Speech is the one route whose answer is a stream rather than one
+        // JSON body, so it writes its own response.
+        if matches!(request.method(), Method::Post) && path(&request) == "/v1/synthesize" {
+            synthesize::handle(&request, outparam);
+            return;
+        }
         let (status, body) = route(&request);
         send_response(outparam, status, &body);
     }
@@ -39,13 +49,18 @@ impl Guest for Component {
 
 export!(Component);
 
+/// The request's path, without its query.
+fn path(request: &IncomingRequest) -> String {
+    let full = request.path_with_query().unwrap_or_default();
+    full.split('?').next().unwrap_or("").to_string()
+}
+
 /// Dispatch a `/v1` request to its handler, returning `(status, json_bytes)`.
 fn route(request: &IncomingRequest) -> (u16, Vec<u8>) {
     let method = request.method();
-    let full = request.path_with_query().unwrap_or_default();
-    let path = full.split('?').next().unwrap_or("");
+    let path = path(request);
 
-    match (&method, path) {
+    match (&method, path.as_str()) {
         (Method::Get, "/v1/ping") => ok(&serde_json::json!({
             "status": "success", "message": "pong"
         })),
@@ -69,21 +84,9 @@ fn route(request: &IncomingRequest) -> (u16, Vec<u8>) {
 fn transcribe(request: &IncomingRequest) -> (u16, Vec<u8>) {
     let entries = request.headers().entries();
     let Some(api_key) = crate::header(&entries, "x-voice-secret-mistral_api_key") else {
-        // Include a human-readable `detail` that the daemon surfaces to the user.
-        return (
-            400,
-            to_vec(&serde_json::json!({
-                "status": "error",
-                "message": "missing_secret_mistral_api_key",
-                "detail": "Mistral API key not set. Add it in Settings \u{2192} Models \u{2192} Mistral.",
-            })),
-        );
+        return missing_key();
     };
-    // Internal test seam: `base_url` is not a declared manifest option, so the
-    // daemon never sends this header in production — the default is always used.
-    // The round-trip tests inject it to reach a mock upstream.
-    let base_url = crate::header(&entries, "x-voice-option-base_url")
-        .unwrap_or_else(|| "https://api.mistral.ai".to_string());
+    let base_url = base_url(&entries);
     let model = crate::header(&entries, "x-voice-model")
         .unwrap_or_else(|| "voxtral-mini-transcribe-3".to_string());
 
@@ -181,6 +184,29 @@ fn call_mistral(
     crate::parse_transcript(&bytes)
 }
 
+/// The answer to a request arriving without the API key, with a
+/// human-readable `detail` that the daemon surfaces to the user.
+fn missing_key() -> (u16, Vec<u8>) {
+    (
+        400,
+        to_vec(&serde_json::json!({
+            "status": "error",
+            "message": "missing_secret_mistral_api_key",
+            "detail": "Mistral API key not set. Add it in Settings \u{2192} Models \u{2192} Mistral.",
+        })),
+    )
+}
+
+/// Where Mistral is.
+///
+/// Internal test seam: `base_url` is not a declared manifest option, so the
+/// daemon never sends this header in production — the default is always used.
+/// The round-trip tests inject it to reach a mock upstream.
+fn base_url(entries: &[(String, Vec<u8>)]) -> String {
+    crate::header(entries, "x-voice-option-base_url")
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string())
+}
+
 /// One `POST /v1/audio/transcriptions`, answered with its status and body.
 fn post_transcription(
     base_url: &str,
@@ -192,6 +218,27 @@ fn post_transcription(
 ) -> Result<(u16, Vec<u8>), String> {
     let boundary = "----superstt7MA4YWxkTrZu0gW";
     let multipart = crate::build_multipart(boundary, model, language, context_bias, wav);
+    let response = post(
+        base_url,
+        api_key,
+        "/v1/audio/transcriptions",
+        &format!("multipart/form-data; boundary={boundary}"),
+        &multipart,
+    )?;
+    let status = response.status();
+    let body = response.consume().map_err(|()| "response_consume")?;
+    Ok((status, read_all(body)?))
+}
+
+/// Send one `POST` to Mistral and wait for the head of its answer. The body
+/// is the caller's to read, all at once or as it streams.
+fn post(
+    base_url: &str,
+    api_key: &str,
+    path: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Result<IncomingResponse, String> {
     let (is_https, authority) = crate::parse_base(base_url);
     let scheme = if is_https {
         Scheme::Https
@@ -204,10 +251,7 @@ fn post_transcription(
         .append("authorization", format!("Bearer {api_key}").as_bytes())
         .map_err(|e| format!("header: {e:?}"))?;
     headers
-        .append(
-            "content-type",
-            format!("multipart/form-data; boundary={boundary}").as_bytes(),
-        )
+        .append("content-type", content_type.as_bytes())
         .map_err(|e| format!("header: {e:?}"))?;
 
     let request = OutgoingRequest::new(headers);
@@ -221,7 +265,7 @@ fn post_transcription(
         .set_authority(Some(&authority))
         .map_err(|()| "set_authority")?;
     request
-        .set_path_with_query(Some("/v1/audio/transcriptions"))
+        .set_path_with_query(Some(path))
         .map_err(|()| "set_path")?;
 
     // Obtain the body handle, start the request, then stream the body — the
@@ -229,20 +273,16 @@ fn post_transcription(
     let out_body = request.body().map_err(|()| "request_body")?;
     let future = wasi::http::outgoing_handler::handle(request, None)
         .map_err(|e| format!("handle: {e:?}"))?;
-    write_all(&out_body, &multipart)?;
+    write_all(&out_body, body)?;
     OutgoingBody::finish(out_body, None).map_err(|e| format!("finish: {e:?}"))?;
 
     let pollable = future.subscribe();
     pollable.block();
-    let response = future
+    future
         .get()
         .ok_or("no_response")?
         .map_err(|()| "future_taken")?
-        .map_err(|e| format!("http: {e:?}"))?;
-
-    let status = response.status();
-    let body = response.consume().map_err(|()| "response_consume")?;
-    Ok((status, read_all(body)?))
+        .map_err(|e| format!("http: {e:?}"))
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

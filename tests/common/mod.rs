@@ -2,7 +2,7 @@
 //! Self-contained wasmtime host harness that "plays the daemon" for the Mistral
 //! *realtime* backend: it loads the prebuilt component and drives both halves of
 //! the `realtime-backend` world in-process, exactly as Super Voice's daemon does —
-//! the batch `/v1` contract over `wasi:http`, and the `super-stt:realtime`
+//! the batch `/v1` contract over `wasi:http`, and the `super-engine:realtime`
 //! WebSocket session — while confining the component's outbound egress to an
 //! allowlist with the same SSRF guard. This repo shares no code with Super Voice;
 //! the harness is a minimal, independent reimplementation of the daemon's
@@ -49,12 +49,57 @@ wasmtime::component::bindgen!({
         "wasi:io": wasmtime_wasi::p2::bindings::io,
         "wasi:clocks": wasmtime_wasi::p2::bindings::clocks,
         "wasi:http": wasmtime_wasi_http::p2::bindings::http,
-        "super-stt:realtime/ws.ws-stream": WsStreamResource,
-        "super-stt:realtime/ws.consumer-stream": ConsumerStreamResource,
+        "super-engine:realtime/ws.ws-stream": WsStreamResource,
+        "super-engine:realtime/ws.consumer-stream": ConsumerStreamResource,
     },
 });
 
-pub use self::super_stt::realtime::ws::{CloseFrame, WsError, WsFrame};
+pub use self::super_engine::realtime::ws::{CloseFrame, WsError, WsFrame};
+
+/// What `POST /v1/synthesize` answered.
+pub struct Synthesis {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl Synthesis {
+    /// A response header, by name.
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// The body as `(kind, payload)` frames, the way the daemon reads it.
+    ///
+    /// # Panics
+    /// If the body is not a whole sequence of frames.
+    #[must_use]
+    pub fn frames(&self) -> Vec<(u8, Vec<u8>)> {
+        let mut frames = Vec::new();
+        let mut rest = self.body.as_slice();
+        while !rest.is_empty() {
+            assert!(rest.len() >= 5, "a truncated frame header: {rest:?}");
+            let len = u32::from_le_bytes(rest[1..5].try_into().unwrap()) as usize;
+            assert!(rest.len() >= 5 + len, "a truncated frame payload");
+            frames.push((rest[0], rest[5..5 + len].to_vec()));
+            rest = &rest[5 + len..];
+        }
+        frames
+    }
+
+    /// The body as the JSON error envelope.
+    ///
+    /// # Panics
+    /// If it is not JSON.
+    #[must_use]
+    pub fn json(&self) -> serde_json::Value {
+        serde_json::from_slice(&self.body).expect("a JSON body")
+    }
+}
 
 /// Path to the prebuilt component (`just build-component`), or `None` if it
 /// isn't built — tests skip gracefully in that case so a partial `cargo test`
@@ -211,7 +256,7 @@ fn is_disallowed_v4(v4: Ipv4Addr) -> bool {
         || v4.is_broadcast()
 }
 
-// ── outgoing `super-stt:realtime/ws` host (mirrors the daemon's ws_host.rs) ──
+// ── outgoing `super-engine:realtime/ws` host (mirrors the daemon's ws_host.rs) ──
 
 /// A live outgoing WebSocket owned by the host. `None` once closed.
 pub struct WsStreamResource {
@@ -344,7 +389,7 @@ const RESERVED_HEADERS: &[&str] = &[
     "sec-websocket-version",
 ];
 
-impl self::super_stt::realtime::ws::Host for Host {
+impl self::super_engine::realtime::ws::Host for Host {
     async fn connect(
         &mut self,
         url: String,
@@ -425,7 +470,7 @@ impl self::super_stt::realtime::ws::Host for Host {
 // cannot be dropped from the members that never await. `unknown_lints` keeps
 // the attribute harmless on toolchains predating the lint.
 #[allow(unknown_lints, clippy::unused_async_trait_impl)]
-impl self::super_stt::realtime::ws::HostWsStream for Host {
+impl self::super_engine::realtime::ws::HostWsStream for Host {
     async fn send_text(
         &mut self,
         self_: Resource<WsStreamResource>,
@@ -501,7 +546,7 @@ impl self::super_stt::realtime::ws::HostWsStream for Host {
 // cannot be dropped from the members that never await. `unknown_lints` keeps
 // the attribute harmless on toolchains predating the lint.
 #[allow(unknown_lints, clippy::unused_async_trait_impl)]
-impl self::super_stt::realtime::ws::HostConsumerStream for Host {
+impl self::super_engine::realtime::ws::HostConsumerStream for Host {
     async fn send_text(
         &mut self,
         self_: Resource<ConsumerStreamResource>,
@@ -601,7 +646,7 @@ impl WasmBackend {
         let mut linker: Linker<Host> = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
         wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
-        self::super_stt::realtime::ws::add_to_linker::<Host, wasmtime::component::HasSelf<Host>>(
+        self::super_engine::realtime::ws::add_to_linker::<Host, wasmtime::component::HasSelf<Host>>(
             &mut linker,
             |h| h,
         )?;
@@ -751,8 +796,67 @@ impl WasmBackend {
         }
     }
 
+    /// `POST /v1/synthesize` with `request` as the body. The guest call and the
+    /// read of its body run together, as the daemon runs them: the guest
+    /// streams its audio, so awaiting it first would leave it writing into a
+    /// body nobody reads.
+    ///
+    /// # Errors
+    /// Returns an error if the component cannot be invoked or its response
+    /// cannot be read.
+    pub async fn synthesize(&self, request: &serde_json::Value) -> Result<Synthesis> {
+        let mut store = Store::new(&self.engine, self.new_host());
+        let mut builder = hyper::Request::builder()
+            .method("POST")
+            .uri("http://backend.local/v1/synthesize")
+            .header("content-type", "application/json")
+            .header("x-voice-model", self.model_id.as_str());
+        for (key, value) in &self.transcribe_headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+        let body = bytes::Bytes::from(serde_json::to_vec(request)?);
+        let request = builder
+            .body(
+                http_body_util::Full::new(body)
+                    .map_err(|never: std::convert::Infallible| -> ErrorCode { match never {} }),
+            )
+            .context("building backend request")?;
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let req = store
+            .data_mut()
+            .http()
+            .new_incoming_request(Scheme::Http, request)?;
+        let out = store.data_mut().http().new_response_outparam(tx)?;
+        let inst = self.pre.instantiate_async(&mut store).await?;
+        let guest = inst
+            .wasi_http_incoming_handler()
+            .call_handle(&mut store, req, out);
+        let host = async {
+            let response = rx
+                .await
+                .context("backend produced no response")?
+                .map_err(|e| anyhow!("backend transport error: {e:?}"))?;
+            let status = response.status().as_u16();
+            let headers = response
+                .headers()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or_default().to_string()))
+                .collect();
+            let body = response.into_body().collect().await?.to_bytes().to_vec();
+            anyhow::Ok(Synthesis {
+                status,
+                headers,
+                body,
+            })
+        };
+        let (guest, host) = tokio::join!(guest, host);
+        guest?;
+        host
+    }
+
     /// Run one consumer realtime session: instantiate the component and invoke
-    /// its `super-stt:realtime/ws-server.handle` export with the injected
+    /// its `super-engine:realtime/ws-server.handle` export with the injected
     /// headers and a host-owned consumer stream. Returns when the guest's
     /// handler returns.
     ///
@@ -775,7 +879,7 @@ impl WasmBackend {
             .table
             .push(ConsumerStreamResource::new(transport))?;
         let inst = self.pre.instantiate_async(&mut store).await?;
-        inst.super_stt_realtime_ws_server()
+        inst.super_engine_realtime_ws_server()
             .call_handle(&mut store, &headers, consumer)
             .await?
             .map_err(|e| anyhow!("ws-server.handle returned error: {e:?}"))
