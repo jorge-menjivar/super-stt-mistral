@@ -39,7 +39,7 @@ const CONSUMER: u32 = 0;
 const UPSTREAM: u32 = 1;
 
 const DEFAULT_BASE_URL: &str = "https://api.mistral.ai";
-const DEFAULT_MODEL: &str = "voxtral-mini-transcribe-realtime-2602";
+const DEFAULT_MODEL: &str = "voxtral-mini-transcribe-realtime-3";
 const INPUT_AUDIO_FLUSH: &str = r#"{"type":"input_audio.flush"}"#;
 const INPUT_AUDIO_END: &str = r#"{"type":"input_audio.end"}"#;
 
@@ -50,16 +50,17 @@ impl WsServerGuest for super::Component {
 }
 
 fn run(headers: &[(String, Vec<u8>)], consumer: &ConsumerStream) -> Result<(), WsError> {
-    let Some(api_key) = crate::header(headers, "x-stt-secret-mistral_api_key") else {
+    let Some(api_key) = crate::header(headers, "x-voice-secret-mistral_api_key") else {
         let _ = consumer.send_text(&crate::error_json("missing mistral api key"));
         return Ok(());
     };
     // Internal test seam: `base_url` is not a declared manifest option, so the
     // daemon never sends this header in production — the default is always used.
     // The realtime round-trip test injects it to reach a mock upstream.
-    let base_url = crate::header(headers, "x-stt-option-base_url")
+    let base_url = crate::header(headers, "x-voice-option-base_url")
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-    let model = crate::header(headers, "x-stt-model").unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let model =
+        crate::header(headers, "x-voice-model").unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
     // 1. Read and validate the consumer's `start` frame. Mistral needs no
     //    session config — the model is in the URL and PCM s16le/16 kHz is
@@ -79,23 +80,32 @@ fn run(headers: &[(String, Vec<u8>)], consumer: &ConsumerStream) -> Result<(), W
 
     // 2. Open the upstream WS and wait for `session.created` before streaming.
     let url = crate::ws_url(&base_url, &model);
-    let upstream = match ws::connect(
-        &url,
-        &[(
-            "authorization".to_string(),
-            format!("Bearer {api_key}").into_bytes(),
-        )],
-    ) {
-        Ok(u) => u,
-        Err(e) => {
-            let _ = consumer.send_text(&crate::error_json(&format!(
-                "upstream connect failed: {e:?}"
-            )));
-            return Ok(());
-        }
-    };
-    if !await_session_created(&upstream, consumer) {
+    let Some(mut upstream) = open_upstream(&url, &api_key, consumer) else {
         return Ok(());
+    };
+
+    // The user's dictation context, as `context_bias` entries, set on the
+    // session before any audio: Mistral refuses a change once audio has
+    // started. It answers `session.updated`, or refuses with an `error` and
+    // closes the connection. A context it refuses should cost the context, not
+    // the recording, so the session starts over on a fresh connection without
+    // one.
+    let context_bias = crate::context_bias(
+        crate::header(headers, "x-voice-prompt").as_deref(),
+        crate::header(headers, "x-voice-vocabulary").as_deref(),
+    );
+    if !context_bias.is_empty() {
+        let taken = upstream
+            .send_text(&crate::session_update_json(&context_bias))
+            .is_ok()
+            && await_session_updated(&upstream);
+        if !taken {
+            let _ = upstream.close();
+            let Some(fresh) = open_upstream(&url, &api_key, consumer) else {
+                return Ok(());
+            };
+            upstream = fresh;
+        }
     }
 
     // 3. Pump both directions at once for as long as the consumer is sending.
@@ -182,6 +192,43 @@ fn end_input(upstream: &WsStream, consumer: &ConsumerStream) -> bool {
         }
     }
     true
+}
+
+/// Connect to the upstream and wait for its handshake. `None` (after notifying
+/// the consumer) when either fails.
+fn open_upstream(url: &str, api_key: &str, consumer: &ConsumerStream) -> Option<WsStream> {
+    let upstream = match ws::connect(
+        url,
+        &[(
+            "authorization".to_string(),
+            format!("Bearer {api_key}").into_bytes(),
+        )],
+    ) {
+        Ok(u) => u,
+        Err(e) => {
+            let _ = consumer.send_text(&crate::error_json(&format!(
+                "upstream connect failed: {e:?}"
+            )));
+            return None;
+        }
+    };
+    await_session_created(&upstream, consumer).then_some(upstream)
+}
+
+/// Read upstream until it answers the `session.update` just sent: `true` for
+/// `session.updated`, `false` for an `error` or a closed connection.
+fn await_session_updated(upstream: &WsStream) -> bool {
+    loop {
+        match upstream.recv() {
+            Ok(WsFrame::Text(s)) => match event_type(&s).as_deref() {
+                Some("session.updated") => return true,
+                Some("error") => return false,
+                _ => {}
+            },
+            Ok(WsFrame::Binary(_)) => {}
+            Ok(WsFrame::Close(_)) | Err(_) => return false,
+        }
+    }
 }
 
 /// Read upstream until Mistral's `session.created` handshake event. Returns

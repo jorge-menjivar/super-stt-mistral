@@ -68,7 +68,7 @@ fn route(request: &IncomingRequest) -> (u16, Vec<u8>) {
 /// the audio body, forward to Mistral, and return the transcription.
 fn transcribe(request: &IncomingRequest) -> (u16, Vec<u8>) {
     let entries = request.headers().entries();
-    let Some(api_key) = crate::header(&entries, "x-stt-secret-mistral_api_key") else {
+    let Some(api_key) = crate::header(&entries, "x-voice-secret-mistral_api_key") else {
         // Include a human-readable `detail` that the daemon surfaces to the user.
         return (
             400,
@@ -82,10 +82,10 @@ fn transcribe(request: &IncomingRequest) -> (u16, Vec<u8>) {
     // Internal test seam: `base_url` is not a declared manifest option, so the
     // daemon never sends this header in production — the default is always used.
     // The round-trip tests inject it to reach a mock upstream.
-    let base_url = crate::header(&entries, "x-stt-option-base_url")
+    let base_url = crate::header(&entries, "x-voice-option-base_url")
         .unwrap_or_else(|| "https://api.mistral.ai".to_string());
-    let model =
-        crate::header(&entries, "x-stt-model").unwrap_or_else(|| "voxtral-mini-latest".to_string());
+    let model = crate::header(&entries, "x-voice-model")
+        .unwrap_or_else(|| "voxtral-mini-transcribe-3".to_string());
 
     let Ok(body) = request.consume() else {
         return err(400, "no_body");
@@ -120,7 +120,22 @@ fn transcribe(request: &IncomingRequest) -> (u16, Vec<u8>) {
         Some(code) => Some(code),
     };
 
-    match call_mistral(&base_url, &api_key, &model, language, &audio, sample_rate) {
+    // The user's dictation context, as `context_bias` entries. Read from the
+    // headers rather than the body: it is the daemon's, not the caller's.
+    let context_bias = crate::context_bias(
+        crate::header(&entries, "x-voice-prompt").as_deref(),
+        crate::header(&entries, "x-voice-vocabulary").as_deref(),
+    );
+
+    match call_mistral(
+        &base_url,
+        &api_key,
+        &model,
+        language,
+        &context_bias,
+        &audio,
+        sample_rate,
+    ) {
         Ok(text) => (
             200,
             to_vec(&serde_json::json!({ "status": "success", "transcription": text })),
@@ -135,17 +150,48 @@ fn transcribe(request: &IncomingRequest) -> (u16, Vec<u8>) {
 }
 
 /// Send the audio to Mistral's transcription API and return the text.
+///
+/// A request carrying a context that Mistral answers with `400` is sent again
+/// without it. Mistral refuses the whole request over its context, when the
+/// audio and the context together run past the model's window, for one, and a
+/// context it will not take should cost the context, not the recording.
 fn call_mistral(
     base_url: &str,
     api_key: &str,
     model: &str,
     language: Option<&str>,
+    context_bias: &[String],
     audio: &[f32],
     sample_rate: u32,
 ) -> Result<String, String> {
     let wav = crate::encode_wav(audio, sample_rate);
+    let send = |context_bias: &[String]| {
+        post_transcription(base_url, api_key, model, language, context_bias, &wav)
+    };
+    let (mut status, mut bytes) = send(context_bias)?;
+    if status == 400 && !context_bias.is_empty() {
+        (status, bytes) = send(&[])?;
+    }
+    if !(200..300).contains(&status) {
+        return Err(format!(
+            "status {status}: {}",
+            String::from_utf8_lossy(&bytes)
+        ));
+    }
+    crate::parse_transcript(&bytes)
+}
+
+/// One `POST /v1/audio/transcriptions`, answered with its status and body.
+fn post_transcription(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    language: Option<&str>,
+    context_bias: &[String],
+    wav: &[u8],
+) -> Result<(u16, Vec<u8>), String> {
     let boundary = "----superstt7MA4YWxkTrZu0gW";
-    let multipart = crate::build_multipart(boundary, model, language, &wav);
+    let multipart = crate::build_multipart(boundary, model, language, context_bias, wav);
     let (is_https, authority) = crate::parse_base(base_url);
     let scheme = if is_https {
         Scheme::Https
@@ -196,14 +242,7 @@ fn call_mistral(
 
     let status = response.status();
     let body = response.consume().map_err(|()| "response_consume")?;
-    let bytes = read_all(body)?;
-    if !(200..300).contains(&status) {
-        return Err(format!(
-            "status {status}: {}",
-            String::from_utf8_lossy(&bytes)
-        ));
-    }
-    crate::parse_transcript(&bytes)
+    Ok((status, read_all(body)?))
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

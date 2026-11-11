@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Task runner for the standalone Mistral realtime WASM backend. Mirrors the
-# recipe names used by the main super-stt repo (`just check`, `just ci`, etc.).
+# recipe names used by the main Super Voice repo (`just check`, `just ci`, etc.).
 
 # Default: build the component
 default: build-component

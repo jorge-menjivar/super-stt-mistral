@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-only
-#:schema https://jorge-menjivar.github.io/super-stt/backend.schema.json
+#:schema https://jorge-menjivar.github.io/super-voice/backend.schema.json
 # Mistral backend configuration. See docs/protocol/backend/config.md.
 
 [backend]
-  id          = "app.super-stt.mistral"
+  # The id names the install directory. An install under the old id,
+  # app.super-stt.mistral, moves to this one on update, because the daemon
+  # finds it by `source`.
+  id          = "app.super-voice.mistral"
+  # The repository's old name, which GitHub redirects. `source` is the
+  # backend's identity: installed copies find their updates by it, and the
+  # user's settings, API key and selected model are named by it.
   source      = "github.com/jorge-menjivar/super-stt-mistral"
   name        = "Mistral"
-  version     = "0.1.1"
+  version     = "0.2.0"
   kind        = "wasm"
   entrypoint  = "mistral.wasm"
   contract    = "v2"
@@ -19,6 +25,11 @@
 [capabilities]
   websocket = true
 
+  # Opts into being handed the user's dictation context as `x-voice-prompt` and
+  # `x-voice-vocabulary`. Both go to Mistral as `context_bias` entries, the
+  # terms and then the prompt, on recordings and on realtime sessions.
+  context   = true
+
 [assets]
   wasm = "mistral.wasm"
 
@@ -28,8 +39,12 @@
   description = "Used to authenticate requests to api.mistral.ai."
   required    = true
 
+# Mistral's transcription models, Voxtral Transcribe 3. The Voxtral Transcribe 2
+# models this backend offered before, voxtral-mini-latest and
+# voxtral-mini-transcribe-realtime-2602, are deprecated and retire on
+# 2027-04-30.
 [[models]]
-  name                = "voxtral-mini-latest"
+  name                = "voxtral-mini-transcribe-3"
   provider            = "mistral"
   multilingual        = true
   primary_language    = "en"
@@ -51,7 +66,29 @@
   supported_devices   = ["none"]
 
 [[models]]
-  name                = "voxtral-mini-transcribe-realtime-2602"
+  name                = "voxtral-small-transcribe-3"
+  provider            = "mistral"
+  multilingual        = true
+  primary_language    = "en"
+  supported_languages = [
+    "en",
+    "zh",
+    "hi",
+    "es",
+    "ar",
+    "fr",
+    "pt",
+    "ru",
+    "de",
+    "ja",
+    "ko",
+    "it",
+    "nl"
+  ]
+  supported_devices   = ["none"]
+
+[[models]]
+  name                = "voxtral-mini-transcribe-realtime-3"
   provider            = "mistral"
   multilingual        = true
   primary_language    = "en"
