@@ -85,7 +85,7 @@ fn transcribe(request: &IncomingRequest) -> (u16, Vec<u8>) {
     let base_url = crate::header(&entries, "x-voice-option-base_url")
         .unwrap_or_else(|| "https://api.mistral.ai".to_string());
     let model = crate::header(&entries, "x-voice-model")
-        .unwrap_or_else(|| "voxtral-mini-latest".to_string());
+        .unwrap_or_else(|| "voxtral-mini-transcribe-3".to_string());
 
     let Ok(body) = request.consume() else {
         return err(400, "no_body");

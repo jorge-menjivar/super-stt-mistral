@@ -276,10 +276,10 @@ mod tests {
             header(&voice, "x-voice-model").as_deref(),
             Some("voxtral-mini-transcribe-3")
         );
-        let stt = [entry("x-stt-model", "voxtral-mini-latest")];
+        let stt = [entry("x-stt-model", "voxtral-small-transcribe-3")];
         assert_eq!(
             header(&stt, "x-voice-model").as_deref(),
-            Some("voxtral-mini-latest")
+            Some("voxtral-small-transcribe-3")
         );
         let both = [entry("x-stt-model", "old"), entry("x-voice-model", "new")];
         assert_eq!(header(&both, "x-voice-model").as_deref(), Some("new"));
@@ -328,11 +328,11 @@ mod tests {
 
     #[test]
     fn build_multipart_has_model_and_file_parts() {
-        let body = build_multipart("BOUND", "voxtral-mini-latest", None, b"WAVDATA");
+        let body = build_multipart("BOUND", "voxtral-mini-transcribe-3", None, b"WAVDATA");
         let s = String::from_utf8_lossy(&body);
         assert!(s.starts_with("--BOUND\r\n"));
         assert!(s.contains("name=\"model\""));
-        assert!(s.contains("voxtral-mini-latest"));
+        assert!(s.contains("voxtral-mini-transcribe-3"));
         assert!(s.contains("name=\"file\"; filename=\"audio.wav\""));
         assert!(s.contains("Content-Type: audio/wav"));
         assert!(s.contains("WAVDATA"));
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn build_multipart_includes_language_when_present() {
-        let body = build_multipart("BOUND", "voxtral-mini-latest", Some("es"), b"WAVDATA");
+        let body = build_multipart("BOUND", "voxtral-mini-transcribe-3", Some("es"), b"WAVDATA");
         let s = String::from_utf8_lossy(&body);
         assert!(s.contains("name=\"language\""));
         assert!(s.contains("\r\n\r\nes\r\n"));

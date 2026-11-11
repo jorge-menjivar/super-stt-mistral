@@ -30,7 +30,7 @@ async fn live_mistral() {
     let mut backend = WasmBackend::new_realtime(
         &path,
         vec!["api.mistral.ai".to_string()],
-        "voxtral-mini-latest".to_string(),
+        "voxtral-mini-transcribe-3".to_string(),
         vec![(SECRET.to_string(), key)],
     )
     .expect("load backend");

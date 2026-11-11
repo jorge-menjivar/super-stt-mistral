@@ -95,7 +95,7 @@ async fn realtime_round_trip() {
     let backend = WasmBackend::new_realtime(
         &path,
         vec![authority.clone()],
-        "voxtral-mini-transcribe-realtime-2602".to_string(),
+        "voxtral-mini-transcribe-realtime-3".to_string(),
         vec![
             (
                 "x-voice-secret-mistral_api_key".to_string(),
@@ -239,7 +239,7 @@ fn realtime_backend(authority: &str) -> WasmBackend {
     WasmBackend::new_realtime(
         &path,
         vec![authority.to_string()],
-        "voxtral-mini-transcribe-realtime-2602".to_string(),
+        "voxtral-mini-transcribe-realtime-3".to_string(),
         vec![
             (
                 "x-voice-secret-mistral_api_key".to_string(),

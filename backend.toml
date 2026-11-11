@@ -28,8 +28,12 @@
   description = "Used to authenticate requests to api.mistral.ai."
   required    = true
 
+# Mistral's transcription models, Voxtral Transcribe 3. The Voxtral Transcribe 2
+# models this backend offered before, voxtral-mini-latest and
+# voxtral-mini-transcribe-realtime-2602, are deprecated and retire on
+# 2027-04-30.
 [[models]]
-  name                = "voxtral-mini-latest"
+  name                = "voxtral-mini-transcribe-3"
   provider            = "mistral"
   multilingual        = true
   primary_language    = "en"
@@ -51,7 +55,29 @@
   supported_devices   = ["none"]
 
 [[models]]
-  name                = "voxtral-mini-transcribe-realtime-2602"
+  name                = "voxtral-small-transcribe-3"
+  provider            = "mistral"
+  multilingual        = true
+  primary_language    = "en"
+  supported_languages = [
+    "en",
+    "zh",
+    "hi",
+    "es",
+    "ar",
+    "fr",
+    "pt",
+    "ru",
+    "de",
+    "ja",
+    "ko",
+    "it",
+    "nl"
+  ]
+  supported_devices   = ["none"]
+
+[[models]]
+  name                = "voxtral-mini-transcribe-realtime-3"
   provider            = "mistral"
   multilingual        = true
   primary_language    = "en"

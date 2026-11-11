@@ -56,7 +56,7 @@ async fn transcribe_round_trip() {
     let mut backend = WasmBackend::new_realtime(
         &component_or_skip!(),
         vec![authority.clone()],
-        "voxtral-mini-latest".to_string(),
+        "voxtral-mini-transcribe-3".to_string(),
         vec![
             (SECRET.to_string(), "test-key".to_string()),
             (BASE_URL.to_string(), format!("http://{authority}")),
@@ -92,7 +92,7 @@ async fn the_super_stt_header_names_still_work() {
     let mut backend = WasmBackend::new_realtime(
         &component_or_skip!(),
         vec![authority.clone()],
-        "voxtral-mini-latest".to_string(),
+        "voxtral-mini-transcribe-3".to_string(),
         vec![
             (
                 "x-stt-secret-mistral_api_key".to_string(),
@@ -132,7 +132,7 @@ async fn language_forwarded_in_multipart() {
     let mut backend = WasmBackend::new_realtime(
         &component_or_skip!(),
         vec![authority.clone()],
-        "voxtral-mini-latest".to_string(),
+        "voxtral-mini-transcribe-3".to_string(),
         vec![
             (SECRET.to_string(), "test-key".to_string()),
             (BASE_URL.to_string(), format!("http://{authority}")),
@@ -165,7 +165,7 @@ async fn allowlist_blocks_disallowed_host() {
         &component_or_skip!(),
         // Allowlist a different host than the mock is listening on.
         vec!["api.mistral.ai".to_string()],
-        "voxtral-mini-latest".to_string(),
+        "voxtral-mini-transcribe-3".to_string(),
         vec![
             (SECRET.to_string(), "test-key".to_string()),
             (BASE_URL.to_string(), server.uri()),
@@ -197,7 +197,7 @@ async fn ssrf_blocks_hostname_resolving_to_loopback() {
         &component_or_skip!(),
         // `localhost` is allowlisted by name, but resolves to 127.0.0.1 / ::1.
         vec!["localhost".to_string()],
-        "voxtral-mini-latest".to_string(),
+        "voxtral-mini-transcribe-3".to_string(),
         vec![
             (SECRET.to_string(), "test-key".to_string()),
             (BASE_URL.to_string(), format!("http://localhost:{port}")),

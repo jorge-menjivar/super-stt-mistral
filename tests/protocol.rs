@@ -29,7 +29,7 @@ async fn ping_and_status() {
     let backend = WasmBackend::new_realtime(
         &component_or_skip!(),
         Vec::new(),
-        "voxtral-mini-latest".to_string(),
+        "voxtral-mini-transcribe-3".to_string(),
         Vec::new(),
     )
     .expect("load backend");
@@ -50,7 +50,7 @@ async fn missing_secret_is_reported() {
     let mut backend = WasmBackend::new_realtime(
         &component_or_skip!(),
         Vec::new(),
-        "voxtral-mini-latest".to_string(),
+        "voxtral-mini-transcribe-3".to_string(),
         // No SECRET header injected.
         vec![],
     )

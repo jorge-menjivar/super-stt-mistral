@@ -39,7 +39,7 @@ const CONSUMER: u32 = 0;
 const UPSTREAM: u32 = 1;
 
 const DEFAULT_BASE_URL: &str = "https://api.mistral.ai";
-const DEFAULT_MODEL: &str = "voxtral-mini-transcribe-realtime-2602";
+const DEFAULT_MODEL: &str = "voxtral-mini-transcribe-realtime-3";
 const INPUT_AUDIO_FLUSH: &str = r#"{"type":"input_audio.flush"}"#;
 const INPUT_AUDIO_END: &str = r#"{"type":"input_audio.end"}"#;
 
