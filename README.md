@@ -12,7 +12,9 @@ Mistral's hosted speech models as a backend for
   vocabulary and prompt go to the model with every recording.
 - [**Voxtral TTS 3**](https://docs.mistral.ai/studio/audio/text-to-speech/overview)
   to read text aloud: `voxtral-mini-tts-3`, with Mistral's 36 preset voices in
-  22 languages. The audio streams back as Mistral makes it.
+  22 languages, or in a voice cloned from your own recording. The audio
+  streams back as Mistral makes it. A cloned voice's clip goes to Mistral
+  with each synthesis, and Mistral saves nothing of it.
 
 Everything goes to Mistral, so it needs an API key and a connection rather
 than a GPU.

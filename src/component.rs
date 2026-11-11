@@ -28,6 +28,7 @@ use wasi::io::streams::StreamError;
 
 mod realtime;
 mod synthesize;
+mod voices;
 
 /// Mistral's API, unless a test points the component elsewhere.
 const DEFAULT_BASE_URL: &str = "https://api.mistral.ai";
@@ -75,6 +76,10 @@ fn route(request: &IncomingRequest) -> (u16, Vec<u8>) {
             "status": "success", "message": "Cancelled"
         })),
         (Method::Post, "/v1/transcribe") => transcribe(request),
+        (Method::Post, "/v1/voices") => voices::register(request),
+        (Method::Delete, p) if p.starts_with("/v1/voices/") => {
+            voices::unregister(&p["/v1/voices/".len()..])
+        }
         _ => err(404, "not_found"),
     }
 }

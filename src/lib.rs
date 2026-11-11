@@ -68,9 +68,19 @@ pub fn parse_base(base: &str) -> (bool, String) {
 /// `encode_wav_in_memory`).
 #[must_use]
 pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+    let pcm: Vec<u8> = samples
+        .iter()
+        .flat_map(|&s| ((s.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16).to_le_bytes())
+        .collect();
+    wav_from_s16le(&pcm, sample_rate)
+}
+
+/// Wrap mono 16-bit little-endian PCM in a WAV header.
+#[must_use]
+pub fn wav_from_s16le(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
     let bytes_per_sample: u32 = 2;
-    let data_len = samples.len() as u32 * bytes_per_sample;
-    let mut buf = Vec::with_capacity(44 + data_len as usize);
+    let data_len = pcm.len() as u32;
+    let mut buf = Vec::with_capacity(44 + pcm.len());
     buf.extend_from_slice(b"RIFF");
     buf.extend_from_slice(&(36 + data_len).to_le_bytes());
     buf.extend_from_slice(b"WAVE");
@@ -84,10 +94,7 @@ pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     buf.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
     buf.extend_from_slice(b"data");
     buf.extend_from_slice(&data_len.to_le_bytes());
-    for &s in samples {
-        let v = (s.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16;
-        buf.extend_from_slice(&v.to_le_bytes());
-    }
+    buf.extend_from_slice(pcm);
     buf
 }
 

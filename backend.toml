@@ -175,6 +175,13 @@
   max_input_chars     = 2000
   output_sample_rate  = 24000
   default_voice       = "voice_478"
+  # A cloned voice goes to Mistral as its reference clip, with every
+  # synthesis in it, and Mistral keeps nothing of it. In between, the backend
+  # keeps the clip in the private /tmp the daemon gives it, which is in memory
+  # and removed when the model unloads. Mistral takes up to 30 s; 15 s cost no
+  # latency over a preset voice when measured, and keep each request near 1 MB.
+  voice_kinds         = ["preset", "cloned"]
+  clone_ref_seconds   = 15.0
 
   [[models.voices]]
     id       = "voice_3150"

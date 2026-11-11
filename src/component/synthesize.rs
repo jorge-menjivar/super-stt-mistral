@@ -14,7 +14,7 @@ use super::wasi::http::types::{
     Fields, IncomingRequest, IncomingResponse, OutgoingBody, OutgoingResponse, ResponseOutparam,
 };
 use super::wasi::io::streams::{OutputStream, StreamError};
-use crate::speech::{self, SpeechEvent, SseReader};
+use crate::speech::{self, SpeechEvent, SseReader, Voice};
 
 /// How much of Mistral's stream is read at once.
 const READ_CHUNK: u64 = 64 * 1024;
@@ -41,9 +41,25 @@ fn start(request: &IncomingRequest) -> Result<IncomingResponse, (u16, Vec<u8>)> 
     let body = request.consume().map_err(|()| super::err(400, "no_body"))?;
     let raw = super::read_all(body).map_err(|e| super::err(500, &e))?;
     let wanted = speech::parse_synthesize(&raw).map_err(|code| super::err(400, code))?;
-    let voice = wanted.voice.as_deref().unwrap_or(speech::DEFAULT_VOICE);
+    // A cloned voice is spoken from the clip registered for it; Mistral is
+    // not asked when there is none.
+    let clip;
+    let voice = match wanted.voice.as_deref() {
+        Some(id) if id.starts_with("voice:") => {
+            clip = super::voices::clip(id).ok_or_else(|| {
+                refusal(
+                    400,
+                    "unknown_voice",
+                    "This cloned voice is not registered with the loaded model.",
+                )
+            })?;
+            Voice::Cloned(&clip)
+        }
+        Some(id) => Voice::Preset(id),
+        None => Voice::Preset(speech::DEFAULT_VOICE),
+    };
 
-    let payload = speech::speech_request_json(&model, &wanted.text, voice);
+    let payload = speech::speech_request_json(&model, &wanted.text, &voice);
     let response = super::post(
         &base_url,
         &api_key,

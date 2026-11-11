@@ -1740,6 +1740,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "wasmtime",
