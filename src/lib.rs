@@ -354,8 +354,11 @@ mod tests {
     fn either_half_stands_alone_and_nothing_is_nothing() {
         assert_eq!(context_bias(Some(r#""Notes""#), None), ["Notes"]);
         assert_eq!(context_bias(None, Some(r#"["CubeCL"]"#)), ["CubeCL"]);
-        assert!(context_bias(None, None).is_empty());
-        assert!(context_bias(Some(r#""  ""#), Some("[]")).is_empty());
+        assert_eq!(context_bias(None, None), Vec::<String>::new());
+        assert_eq!(
+            context_bias(Some(r#""  ""#), Some("[]")),
+            Vec::<String>::new()
+        );
     }
 
     /// A header that will not parse costs that half of the context, not the
