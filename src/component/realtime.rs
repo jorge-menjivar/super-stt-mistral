@@ -24,12 +24,12 @@
 //! `is_stop`, `ws_url`, `audio_append_json`, `classify_upstream_event`,
 //! `preview_json`/`done_json`/`error_json`, `header`) live in the crate root so
 //! they compile and unit-test on the host; this module wires them to the
-//! wasm-only `super-stt:realtime` resources.
+//! wasm-only `super-engine:realtime` resources.
 
 use serde_json::Value;
 
-use super::exports::super_stt::realtime::ws_server::Guest as WsServerGuest;
-use super::super_stt::realtime::ws::{self, ConsumerStream, WsError, WsFrame, WsStream};
+use super::exports::super_engine::realtime::ws_server::Guest as WsServerGuest;
+use super::super_engine::realtime::ws::{self, ConsumerStream, WsError, WsFrame, WsStream};
 use super::wasi::io::poll;
 use crate::UpstreamEvent;
 

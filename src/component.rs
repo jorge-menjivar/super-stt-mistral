@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! The wasm-only `wasi:http` / `super-stt:realtime` component. Compiled for
+//! The wasm-only `wasi:http` / `super-engine:realtime` component. Compiled for
 //! `wasm32-wasip2` only (the `wit-bindgen` bindings don't build for the host);
 //! the pure helpers it calls live in the crate root and are unit-tested there.
 

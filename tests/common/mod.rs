@@ -2,7 +2,7 @@
 //! Self-contained wasmtime host harness that "plays the daemon" for the Mistral
 //! *realtime* backend: it loads the prebuilt component and drives both halves of
 //! the `realtime-backend` world in-process, exactly as Super Voice's daemon does —
-//! the batch `/v1` contract over `wasi:http`, and the `super-stt:realtime`
+//! the batch `/v1` contract over `wasi:http`, and the `super-engine:realtime`
 //! WebSocket session — while confining the component's outbound egress to an
 //! allowlist with the same SSRF guard. This repo shares no code with Super Voice;
 //! the harness is a minimal, independent reimplementation of the daemon's
@@ -49,12 +49,12 @@ wasmtime::component::bindgen!({
         "wasi:io": wasmtime_wasi::p2::bindings::io,
         "wasi:clocks": wasmtime_wasi::p2::bindings::clocks,
         "wasi:http": wasmtime_wasi_http::p2::bindings::http,
-        "super-stt:realtime/ws.ws-stream": WsStreamResource,
-        "super-stt:realtime/ws.consumer-stream": ConsumerStreamResource,
+        "super-engine:realtime/ws.ws-stream": WsStreamResource,
+        "super-engine:realtime/ws.consumer-stream": ConsumerStreamResource,
     },
 });
 
-pub use self::super_stt::realtime::ws::{CloseFrame, WsError, WsFrame};
+pub use self::super_engine::realtime::ws::{CloseFrame, WsError, WsFrame};
 
 /// Path to the prebuilt component (`just build-component`), or `None` if it
 /// isn't built — tests skip gracefully in that case so a partial `cargo test`
@@ -211,7 +211,7 @@ fn is_disallowed_v4(v4: Ipv4Addr) -> bool {
         || v4.is_broadcast()
 }
 
-// ── outgoing `super-stt:realtime/ws` host (mirrors the daemon's ws_host.rs) ──
+// ── outgoing `super-engine:realtime/ws` host (mirrors the daemon's ws_host.rs) ──
 
 /// A live outgoing WebSocket owned by the host. `None` once closed.
 pub struct WsStreamResource {
@@ -344,7 +344,7 @@ const RESERVED_HEADERS: &[&str] = &[
     "sec-websocket-version",
 ];
 
-impl self::super_stt::realtime::ws::Host for Host {
+impl self::super_engine::realtime::ws::Host for Host {
     async fn connect(
         &mut self,
         url: String,
@@ -425,7 +425,7 @@ impl self::super_stt::realtime::ws::Host for Host {
 // cannot be dropped from the members that never await. `unknown_lints` keeps
 // the attribute harmless on toolchains predating the lint.
 #[allow(unknown_lints, clippy::unused_async_trait_impl)]
-impl self::super_stt::realtime::ws::HostWsStream for Host {
+impl self::super_engine::realtime::ws::HostWsStream for Host {
     async fn send_text(
         &mut self,
         self_: Resource<WsStreamResource>,
@@ -501,7 +501,7 @@ impl self::super_stt::realtime::ws::HostWsStream for Host {
 // cannot be dropped from the members that never await. `unknown_lints` keeps
 // the attribute harmless on toolchains predating the lint.
 #[allow(unknown_lints, clippy::unused_async_trait_impl)]
-impl self::super_stt::realtime::ws::HostConsumerStream for Host {
+impl self::super_engine::realtime::ws::HostConsumerStream for Host {
     async fn send_text(
         &mut self,
         self_: Resource<ConsumerStreamResource>,
@@ -601,7 +601,7 @@ impl WasmBackend {
         let mut linker: Linker<Host> = Linker::new(&engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
         wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
-        self::super_stt::realtime::ws::add_to_linker::<Host, wasmtime::component::HasSelf<Host>>(
+        self::super_engine::realtime::ws::add_to_linker::<Host, wasmtime::component::HasSelf<Host>>(
             &mut linker,
             |h| h,
         )?;
@@ -752,7 +752,7 @@ impl WasmBackend {
     }
 
     /// Run one consumer realtime session: instantiate the component and invoke
-    /// its `super-stt:realtime/ws-server.handle` export with the injected
+    /// its `super-engine:realtime/ws-server.handle` export with the injected
     /// headers and a host-owned consumer stream. Returns when the guest's
     /// handler returns.
     ///
@@ -775,7 +775,7 @@ impl WasmBackend {
             .table
             .push(ConsumerStreamResource::new(transport))?;
         let inst = self.pre.instantiate_async(&mut store).await?;
-        inst.super_stt_realtime_ws_server()
+        inst.super_engine_realtime_ws_server()
             .call_handle(&mut store, &headers, consumer)
             .await?
             .map_err(|e| anyhow!("ws-server.handle returned error: {e:?}"))
